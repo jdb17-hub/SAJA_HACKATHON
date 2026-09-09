@@ -148,23 +148,42 @@ def _entrada_nueva(motor) -> None:
 
 
 def _procesar_audio(audio, motor) -> None:
-    from src.audio import duracion_segundos, preparar_wav
+    from src.audio import duracion_segundos, guardar_audio
+    from src.config import STT_PROMPT
 
-    with st.spinner("Transcribiendo en el dispositivo (Whisper)..."):
-        destino = Path(tempfile.gettempdir()) / "qvac_nota.wav"
-        try:
-            ruta = preparar_wav(audio.getvalue(), destino)
-            if duracion_segundos(ruta) < 0.4:
-                st.warning("La grabacion es demasiado corta.")
-                return
-            texto = motor.transcribir(ruta, prompt="Nota de visita a un hospital sobre equipos medicos.")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"No se pudo transcribir: {exc}")
-            return
-    if not texto:
-        st.warning("No se entendio audio en la grabacion.")
+    if not motor.estado.listo:
+        st.warning("Inicia el motor QVAC en la barra lateral antes de dictar.")
         return
-    st.success(f"Transcripcion: {texto}")
+
+    datos = audio.getvalue()
+    ruta = None
+    with st.spinner("Transcribiendo en el dispositivo (Whisper)..."):
+        try:
+            # Se guarda tal cual: QVAC decodifica el formato del navegador.
+            ruta = guardar_audio(datos, Path(tempfile.gettempdir()) / "qvac_nota")
+            duracion = duracion_segundos(ruta)
+            if 0 < duracion < 0.6:
+                st.warning("La grabacion es demasiado corta. Habla un par de segundos mas.")
+                return
+            texto = motor.transcribir(ruta, prompt=STT_PROMPT)
+        except Exception as exc:  # noqa: BLE001
+            # Se adjunta que llego exactamente: sin esto, un fallo de dictado es
+            # imposible de diagnosticar sin reproducirlo.
+            st.error(f"No se pudo transcribir: {type(exc).__name__}: {exc}")
+            st.caption(
+                f"Diagnostico — {len(datos)} bytes, cabecera {datos[:4]!r}, "
+                f"fichero {ruta.name if ruta else 'no escrito'}, "
+                f"modelo {motor.estado.stt_model}"
+            )
+            return
+
+    if not texto:
+        st.warning(
+            "Whisper no encontro voz en la grabacion. Prueba a hablar mas cerca del microfono."
+        )
+        st.caption(f"Diagnostico — {len(datos)} bytes, {duracion:.1f}s de audio, {ruta.suffix}")
+        return
+
     _procesar(texto, "Voice", motor)
 
 
@@ -184,8 +203,23 @@ def _procesar(texto: str, fuente: str, motor) -> None:
 def _revisar_borrador(motor) -> None:
     borrador: Borrador = st.session_state.borrador
 
-    st.markdown("#### Nota original")
-    st.info(st.session_state.texto_original)
+    es_voz = st.session_state.fuente == "Voice"
+    st.markdown("#### Transcripcion" if es_voz else "#### Nota original")
+
+    if es_voz:
+        # Whisper se equivoca con nombres propios, y una palabra mal oida
+        # arrastra toda la extraccion. Poder corregirla y reprocesar evita
+        # tener que repetir la grabacion entera.
+        st.caption("Si el dictado se entendio mal, corrigelo aqui y vuelve a extraer.")
+        corregida = st.text_area(
+            "Transcripcion", st.session_state.texto_original, height=90,
+            label_visibility="collapsed", key=f"trans{st.session_state.revision}",
+        )
+        if corregida.strip() and corregida != st.session_state.texto_original:
+            if st.button("Volver a extraer con el texto corregido", type="primary"):
+                _procesar(corregida, "Voice", motor)
+    else:
+        st.info(st.session_state.texto_original)
 
     izquierda, derecha = st.columns([3, 2])
 

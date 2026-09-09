@@ -268,12 +268,19 @@ def _fusionar(propuesta: dict, pistas: Pistas, texto: str) -> Borrador:
     if not es_desconocido(pistas.customer):
         borrador.customer = pistas.customer
     else:
+        # Se ancla la propuesta *tal cual la dijo el modelo*, antes de
+        # normalizarla. Encajar con el catalogo no es prueba de nada: solo dice
+        # que el nombre existe, no que aparezca en esta nota. Sin esta
+        # comprobacion, un dictado mal entendido acaba archivando los equipos en
+        # el hospital equivocado, que es peor que dejarlo vacio y preguntar.
         candidato = str(propuesta.get("customer") or "")
-        nombre, ficha = N.normalizar_cliente(candidato)
-        # Un nombre propio inventado por el modelo no se acepta.
-        borrador.customer = nombre if (ficha or _anclado(nombre, texto)) else DESCONOCIDO
-        if ficha:
-            pistas.ficha_cliente = ficha
+        if _anclado(candidato, texto):
+            nombre, ficha = N.normalizar_cliente(candidato)
+            borrador.customer = nombre
+            if ficha:
+                pistas.ficha_cliente = ficha
+        else:
+            borrador.customer = DESCONOCIDO
 
     borrador.city = (
         pistas.city if not es_desconocido(pistas.city)

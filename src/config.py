@@ -36,6 +36,23 @@ LLM_MODEL = os.environ.get("QVAC_LLM_MODEL", "QWEN3_1_7B_INST_Q4")
 # Modelo de transcripción (voz -> texto), también on-device.
 STT_MODEL = os.environ.get("QVAC_STT_MODEL", "WHISPER_BASE_Q8_0")
 
+# Idioma del dictado, ISO 639-1. Es obligatorio fijarlo: whisper.cpp asume "en"
+# por defecto y, ante una nota en español, la *traduce* al inglés en vez de
+# transcribirla. "auto" también funciona, pero declarar el idioma da mejor
+# resultado en grabaciones cortas y ruidosas, que es el caso de una visita.
+STT_IDIOMA = os.environ.get("QVAC_STT_IDIOMA", "es")
+
+# initial_prompt de whisper.cpp: sesga el vocabulario hacia lo que esperamos oír.
+# Sin esto, "resonador" sale como "resonado" y las marcas ficticias del catálogo
+# se transcriben como cualquier cosa.
+STT_PROMPT = (
+    "Nota de visita a un hospital sobre equipos médicos de imagen. "
+    "Vocabulario: resonador, resonancia magnética, tomógrafo, tomografía, TAC, "
+    "ecógrafo, ecografía, ultrasonido, rayos X, angiógrafo, monitor de paciente. "
+    "Marcas: NovaMed, Aurelia Health, BluePeak Medical, Orion Imaging, HelixCare, "
+    "Zenith MedTech."
+)
+
 GENERATION_PARAMS = {"temp": 0.0, "top_p": 1.0, "predict": 900, "seed": 7}
 
 # --- Reglas de negocio ------------------------------------------------------

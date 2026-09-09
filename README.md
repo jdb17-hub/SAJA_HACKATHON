@@ -203,11 +203,12 @@ src/
   confidence.py           puntaje 0-100 y alertas
   dedup.py                detección de duplicados
   nlquery.py              consultas en lenguaje natural
-  audio.py                WAV → 16 kHz mono para Whisper
+  audio.py                detección de formato de la grabación
   store.py                SQLite
 scripts/
   import_excel.py         Excel del reto → datos semilla
   test_extraccion.py      evaluación end-to-end (reglas vs. híbrido)
+  test_audio.py           ruta de voz: formato → Whisper → extracción
 ```
 
 ## Pruebas
@@ -247,10 +248,39 @@ Se puede cambiar sin tocar código:
 export QVAC_LLM_MODEL=QWEN3_4B_INST_Q4_K_M
 ```
 
+### Dictado por voz
+
+El colaborador graba al salir de la visita y Whisper transcribe **en el
+dispositivo**; el audio nunca sale del equipo. Tres cosas que no son evidentes y
+que hay que hacer bien para que funcione:
+
+1. **No hay que convertir el audio.** QVAC trae ffmpeg y decodifica wav, ogg,
+   mp3, m4a, flac y aac con cualquier frecuencia de muestreo. Un intento de
+   remuestrear a 16 kHz con el módulo `wave` de Python rompe la grabación real:
+   el navegador produce WAV en coma flotante de 32 bits, que `wave` rechaza con
+   `unknown format: 3`. `src/audio.py` solo detecta el formato por los bytes de
+   cabecera y le pasa el fichero a QVAC.
+
+2. **Hay que declarar el idioma.** Sin `modelConfig={"language": "es"}`,
+   whisper.cpp asume inglés y **traduce**: una nota dictada en español vuelve en
+   inglés y los nombres propios se pierden. Se configura con `QVAC_STT_IDIOMA`.
+
+3. **La petición se construye con `model_validate`, no con argumentos.** El SDK
+   serializa con `exclude_unset=True`, así que el campo `type` que viene del
+   valor por defecto se cae del payload y el worker no sabe qué método invocar.
+   El síntoma es un `RuntimeError: expected a response stream` que no apunta a
+   nada.
+
+Además se le pasa a whisper un `initial_prompt` con el vocabulario esperado
+(modalidades y marcas del catálogo), que es donde más falla un modelo pequeño. Y
+si aun así entiende mal una palabra, la transcripción es **editable**: se corrige
+y se vuelve a extraer, sin repetir la grabación.
+
 ## Limitaciones
 
-- El remuestreo de audio es lineal; suficiente para voz cercana, no para
-  grabaciones con ruido de sala.
+- El dictado usa Whisper Base. Va bien en un pasillo tranquilo; con ruido de
+  sala conviene subir a `WHISPER_SMALL_Q8_0` (`QVAC_STT_MODEL`), que es más
+  lento pero bastante más preciso.
 - La captura por foto de placas (OCR) no está implementada. QVAC lo soporta y
   encajaría en `qvac_engine.py` sin tocar el resto.
 - La inferencia delegada por P2P tampoco: la app usa el modo on-device puro,
