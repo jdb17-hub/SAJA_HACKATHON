@@ -183,7 +183,7 @@ def describir_filtro(filtro: dict) -> str:
     """El filtro en castellano, para que se vea que entendio el agente."""
     partes = []
     if filtro["pais"]:
-        partes.append(f"pais = {filtro['pais']}")
+        partes.append(f"país = {filtro['pais']}")
     if filtro["ciudad"]:
         partes.append(f"ciudad = {filtro['ciudad']}")
     if filtro["cliente"]:
@@ -193,13 +193,13 @@ def describir_filtro(filtro: dict) -> str:
     if filtro["marca"]:
         partes.append(f"marca = {filtro['marca']}")
     if filtro["edad_min"]:
-        partes.append(f"edad >= {filtro['edad_min']} anos")
+        partes.append(f"edad >= {filtro['edad_min']} años")
     if filtro["edad_max"]:
-        partes.append(f"edad <= {filtro['edad_max']} anos")
+        partes.append(f"edad <= {filtro['edad_max']} años")
     if filtro["cantidad_min"]:
         partes.append(f"cantidad >= {filtro['cantidad_min']}")
     if filtro["solo_oportunidades"]:
-        partes.append(f"solo equipos de {EDAD_RENOVACION}+ anos")
+        partes.append(f"solo equipos de {EDAD_RENOVACION}+ años")
     if filtro["solo_sin_verificar"]:
         partes.append("solo datos sin verificar")
     return " · ".join(partes) if partes else "sin filtros (toda la base)"
@@ -208,7 +208,7 @@ def describir_filtro(filtro: dict) -> str:
 def resumir(pregunta: str, filas: list[dict], motor=None) -> str:
     """Respuesta en una frase, calculada de los datos y no del modelo."""
     if not filas:
-        return "No hay observaciones que cumplan esa condicion."
+        return "No hay observaciones que cumplan esa condición."
 
     clientes = sorted({f["customer"] for f in filas})
     unidades = sum(int(f.get("quantity") or 0) for f in filas)
@@ -218,9 +218,9 @@ def resumir(pregunta: str, filas: list[dict], motor=None) -> str:
 
     frase = (
         f"{len(filas)} observaciones · {unidades} unidades · "
-        f"{len(clientes)} cliente(s) en {len(paises)} pais(es) · "
+        f"{len(clientes)} cliente(s) en {len(paises)} país(es) · "
         f"modalidades: {', '.join(modalidades)}"
     )
     if edades:
-        frase += f" · edad media {sum(edades) / len(edades):.1f} anos"
+        frase += f" · edad media {sum(edades) / len(edades):.1f} años"
     return frase

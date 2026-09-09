@@ -6,3 +6,4 @@ data/observaciones.db
 # esperando el correo de bienvenida al arrancar en una maquina nueva.
 # Lo unico que se excluye son los secretos.
 .streamlit/secrets.toml
+*.xlsx

@@ -60,6 +60,26 @@ class MotorQVAC:
         self._stt_id: str | None = None
         self._lock = threading.Lock()
         self.progreso_descarga: float | None = None
+        self._inicio_lock = threading.Lock()
+        self._inicio_hilo: threading.Thread | None = None
+
+    def iniciar_en_segundo_plano(self, reintentar: bool = False) -> None:
+        """Inicia una sola carga compartida, sin bloquear la interfaz."""
+        with self._inicio_lock:
+            if self.estado.listo or (self._inicio_hilo and self._inicio_hilo.is_alive()):
+                return
+            if self.estado.error and not reintentar:
+                return
+            self.estado.error = None
+
+            def cargar() -> None:
+                try:
+                    self.iniciar()
+                except Exception as exc:
+                    self.estado.error = f"{type(exc).__name__}: {exc}"
+
+            self._inicio_hilo = threading.Thread(target=cargar, name="qvac-inicio", daemon=True)
+            self._inicio_hilo.start()
 
     # --- ciclo de vida ------------------------------------------------------
 

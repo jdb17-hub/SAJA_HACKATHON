@@ -44,11 +44,11 @@ class Pregunta:
 
 PLURAL_MODALIDAD = {
     Modalidad.MR: "resonadores",
-    Modalidad.CT: "tomografos",
-    Modalidad.ULTRASOUND: "ecografos",
+    Modalidad.CT: "tomógrafos",
+    Modalidad.ULTRASOUND: "ecógrafos",
     Modalidad.XRAY: "equipos de rayos X",
     Modalidad.MONITORING: "monitores de paciente",
-    Modalidad.IGT: "angiografos",
+    Modalidad.IGT: "angiógrafos",
     Modalidad.UNKNOWN: "equipos",
 }
 
@@ -62,13 +62,13 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
     pendientes: list[Pregunta] = []
 
     if es_desconocido(borrador.customer):
-        pendientes.append(Pregunta("customer", "Que hospital o clinica visitaste?", None, PESO_CAMPO["customer"]))
+        pendientes.append(Pregunta("customer", "¿Qué hospital o clínica visitaste?", None, PESO_CAMPO["customer"]))
     if es_desconocido(borrador.country):
-        pendientes.append(Pregunta("country", "En que pais esta el cliente?", None, PESO_CAMPO["country"]))
+        pendientes.append(Pregunta("country", "¿En qué país está el cliente?", None, PESO_CAMPO["country"]))
     if es_desconocido(borrador.city):
-        pendientes.append(Pregunta("city", "En que ciudad esta?", None, PESO_CAMPO["city"]))
+        pendientes.append(Pregunta("city", "¿En qué ciudad está?", None, PESO_CAMPO["city"]))
     if not borrador.items:
-        pendientes.append(Pregunta("modality", "Que tipo de equipos viste?", None, PESO_CAMPO["modality"]))
+        pendientes.append(Pregunta("modality", "¿Qué tipo de equipos viste?", None, PESO_CAMPO["modality"]))
 
     for i, eq in enumerate(borrador.items):
         etiqueta = _etiqueta_modalidad(eq.modality)
@@ -77,20 +77,20 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
         escala = 1.0 + math.log1p(max(eq.quantity, 1)) / 2
 
         if eq.modality == Modalidad.UNKNOWN:
-            pendientes.append(Pregunta("modality", "Que tipo de equipo era exactamente?", i, PESO_CAMPO["modality"]))
+            pendientes.append(Pregunta("modality", "¿Qué tipo de equipo era exactamente?", i, PESO_CAMPO["modality"]))
         if eq.quantity <= 0:
-            pendientes.append(Pregunta("quantity", f"Cuantos {etiqueta} viste?", i, PESO_CAMPO["quantity"]))
+            pendientes.append(Pregunta("quantity", f"¿Cuántos {PLURAL_MODALIDAD[eq.modality]} viste?", i, PESO_CAMPO["quantity"]))
         if es_desconocido(eq.brand):
             pendientes.append(
-                Pregunta("brand", f"Sabes de que marca son {etiqueta}?", i, PESO_CAMPO["brand"] * escala)
+                Pregunta("brand", f"¿Sabes de qué marca son {etiqueta}?", i, PESO_CAMPO["brand"] * escala)
             )
         if eq.age_years <= 0:
             pendientes.append(
-                Pregunta("age_years", f"Que antiguedad aproximada tienen {etiqueta}?", i, PESO_CAMPO["age_years"] * escala)
+                Pregunta("age_years", f"¿Qué antigüedad aproximada tienen {etiqueta}?", i, PESO_CAMPO["age_years"] * escala)
             )
         if es_desconocido(eq.model) and not es_desconocido(eq.brand):
             # El modelo solo se pregunta si ya sabemos la marca; si no, sobra.
-            pendientes.append(Pregunta("model", f"Recuerdas el modelo de {etiqueta}?", i, PESO_CAMPO["model"]))
+            pendientes.append(Pregunta("model", f"¿Recuerdas el modelo de {etiqueta}?", i, PESO_CAMPO["model"]))
 
     return sorted(pendientes, key=lambda p: -p.valor)
 
@@ -275,7 +275,7 @@ def describir_equipos(borrador: Borrador) -> str:
     se entendio sin construir una frase con un hueco dentro.
     """
     if not borrador.items:
-        return "Todavia no hay ningun equipo registrado."
+        return "Todavía no hay ningún equipo registrado."
     partes = []
     for eq in borrador.items:
         cantidad = eq.quantity if eq.quantity else "?"
@@ -285,7 +285,7 @@ def describir_equipos(borrador: Borrador) -> str:
         if not es_desconocido(eq.model):
             trozo += f" {eq.model}"
         if eq.age_years:
-            trozo += f", aprox. {eq.age_years} anos"
+            trozo += f", aprox. {eq.age_years} años"
         partes.append(trozo)
     return "; ".join(partes)
 
@@ -298,11 +298,11 @@ def resumen(borrador: Borrador) -> str:
     que en ese caso se describe unicamente lo capturado.
     """
     if not borrador.items:
-        return "Todavia no hay ningun equipo registrado."
+        return "Todavía no hay ningún equipo registrado."
     equipos = describir_equipos(borrador)
     if es_desconocido(borrador.customer):
-        return f"Se entendio esto: {equipos}."
+        return f"Se entendió esto: {equipos}."
     lugar = borrador.customer
     if not es_desconocido(borrador.city):
         lugar += f" ({borrador.city})"
-    return f"En {lugar}: {equipos}. Es correcto?"
+    return f"En {lugar}: {equipos}. ¿Es correcto?"
