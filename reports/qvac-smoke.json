@@ -1,0 +1,171 @@
+{
+  "timestamp": "2026-09-09T16:08:11.330056+00:00",
+  "offline_verified": false,
+  "cases": [
+    {
+      "input": "Estoy en Hospital DemoCare Pacific, en Panamá. Tienen dos resonadores y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
+      "result": {
+        "customer": "Hospital DemoCare Pacific",
+        "city": "Panama City",
+        "country": "Panama",
+        "items": [
+          {
+            "group_id": "1de30fea1b66415caf9b61c09bf304dc",
+            "modality": "CT",
+            "quantity": 1,
+            "brand": "Unknown",
+            "model": "Unknown",
+            "age_years": null,
+            "status": "Reported",
+            "notes": ""
+          },
+          {
+            "group_id": "22aef903e5a44343a2899740f10fcdd8",
+            "modality": "MR",
+            "quantity": 1,
+            "brand": "Unknown",
+            "model": "Unknown",
+            "age_years": 8,
+            "status": "Estimated",
+            "notes": ""
+          },
+          {
+            "group_id": "fb4dd97cf6844c6884145b627685a12f",
+            "modality": "MR",
+            "quantity": 1,
+            "brand": "Unknown",
+            "model": "Unknown",
+            "age_years": null,
+            "status": "Reported",
+            "notes": ""
+          }
+        ],
+        "notes": "Cantidad de resonadores aproximada.",
+        "location_source": "catálogo",
+        "inference": "QVAC",
+        "raw_response": {
+          "customer": "Hospital DemoCare Pacific",
+          "city": "Panama City",
+          "country": "Panama",
+          "notes": "Cantidad de resonadores aproximada.",
+          "items": [
+            {
+              "modality": "MR",
+              "quantity": 2,
+              "brand": "Unknown",
+              "model": "Unknown",
+              "age_years": 8,
+              "status": "Estimated"
+            },
+            {
+              "modality": "CT",
+              "quantity": 1,
+              "brand": "Unknown",
+              "model": "Unknown",
+              "age_years": 0,
+              "status": "Estimated"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "Estoy en Hospital DemoCare, tienen dos resonadores.",
+      "result": {
+        "customer": "Unknown",
+        "city": "Unknown",
+        "country": "Unknown",
+        "items": [
+          {
+            "group_id": "ed2c222892e1496b8284a768d5e474d9",
+            "modality": "MR",
+            "quantity": 2,
+            "brand": "Unknown",
+            "model": "Unknown",
+            "age_years": null,
+            "status": "Reported",
+            "notes": ""
+          }
+        ],
+        "notes": "Cantidad de resonadores aproximada.",
+        "location_source": "observación",
+        "inference": "QVAC",
+        "raw_response": {
+          "customer": "Hospital DemoCare",
+          "city": "Unknown",
+          "country": "Unknown",
+          "notes": "Cantidad de resonadores aproximada.",
+          "items": [
+            {
+              "modality": "MR",
+              "quantity": 2,
+              "brand": "Unknown",
+              "model": "Unknown",
+              "age_years": 0,
+              "status": "Estimated"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "Estoy en el Hospital Nuevo Horizonte, tienen un tomógrafo.",
+      "result": {
+        "customer": "Hospital Nuevo Horizonte",
+        "city": "Unknown",
+        "country": "Unknown",
+        "items": [
+          {
+            "group_id": "2c2a3b60a89f4bbc89e5aee0c1933259",
+            "modality": "CT",
+            "quantity": 1,
+            "brand": "Unknown",
+            "model": "Unknown",
+            "age_years": null,
+            "status": "Reported",
+            "notes": ""
+          }
+        ],
+        "notes": "Cantidad de tomografos aproximada.",
+        "location_source": "observación",
+        "inference": "QVAC",
+        "raw_response": {
+          "customer": "Hospital Nuevo Horizonte",
+          "city": "Unknown",
+          "country": "Unknown",
+          "notes": "Cantidad de tomografos aproximada.",
+          "items": [
+            {
+              "modality": "CT",
+              "quantity": 1,
+              "brand": "Unknown",
+              "model": "Unknown",
+              "age_years": 0,
+              "status": "Estimated"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "model": "QWEN3_1_7B_INST_Q4",
+  "query": {
+    "pais": "Brazil",
+    "ciudad": "",
+    "cliente": "",
+    "modalidad": "MR",
+    "marca": "",
+    "edad_min": 8,
+    "edad_max": null,
+    "cantidad_min": 6,
+    "cantidad_max": null,
+    "solo_oportunidades": false,
+    "solo_sin_verificar": false,
+    "agrupar_por": "cliente",
+    "ordenar_por": "edad"
+  },
+  "audio_input": "..\\qvac-project-phillips\\work\\voice-smoke.wav",
+  "transcription": "El hospital tiene dos MRIs y una CT scanner.",
+  "passed": true,
+  "inferences": 4
+}

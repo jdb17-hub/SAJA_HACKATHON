@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "observaciones.db"
+DB_PATH = Path(os.environ.get("QVAC_DB_PATH", str(DATA_DIR / "observaciones.db")))
 
 # --- QVAC -------------------------------------------------------------------
 # El SDK de Python arranca un worker Bare local. En Windows no consigue resolver
@@ -57,6 +57,6 @@ GENERATION_PARAMS = {"temp": 0.0, "top_p": 1.0, "predict": 900, "seed": 7}
 
 # --- Reglas de negocio ------------------------------------------------------
 # Un equipo de imagen se considera candidato a renovación a partir de esta edad.
-EDAD_RENOVACION = 10
+EDAD_RENOVACION = int(os.environ.get("QVAC_EDAD_RENOVACION", "10"))
 # Una observación se marca como "sin verificar" pasado este número de días.
-DIAS_SIN_VERIFICAR = 180
+DIAS_SIN_VERIFICAR = int(os.environ.get("QVAC_DIAS_SIN_VERIFICAR", "180"))

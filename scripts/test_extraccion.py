@@ -113,7 +113,7 @@ def totales(borrador) -> dict[str, int]:
     """Unidades por modalidad, sumando los grupos que el agente haya partido."""
     suma: dict[str, int] = {}
     for eq in borrador.items:
-        suma[eq.modality.value] = suma.get(eq.modality.value, 0) + eq.quantity
+        suma[eq.modality.value] = suma.get(eq.modality.value, 0) + (eq.quantity or 0)
     return suma
 
 
@@ -159,7 +159,7 @@ def main() -> None:
     print(f"Modelo {estado.llm_model} cargado en {estado.segundos_carga:.1f}s")
 
     def hibrido(nota: str):
-        return extraer(nota, motor)
+        return extraer(nota, motor, estricto=True)
 
     c_hib, e_hib, t_hib = evaluar("HIBRIDO (reglas + QVAC en el dispositivo)", hibrido)
     sl_ok, sl_total = evaluar_sin_lugar(hibrido)
@@ -173,6 +173,8 @@ def main() -> None:
     print(f"{'guarda cliente nuevo':<28}{cn_ok:>7}/{cn_total}")
     print(f"\nLatencia media por nota: {t_hib / total:.2f}s · {motor.estado.inferencias} inferencias")
     motor.cerrar()
+    if c_hib != total or e_hib != total or sl_ok != sl_total or cn_ok != cn_total:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

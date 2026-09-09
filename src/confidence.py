@@ -36,7 +36,7 @@ def _fecha(valor: str) -> date | None:
 
 
 def dias_desde(fila: dict) -> int | None:
-    f = _fecha(fila.get("visit_date", "")) or _fecha(fila.get("created_at", ""))
+    f = _fecha(fila.get("verified_date") or fila.get("visit_date", ""))
     return (date.today() - f).days if f else None
 
 
@@ -45,11 +45,11 @@ def _completitud(fila: dict) -> int:
     puntos = 0
     if not es_desconocido(fila.get("modality")):
         puntos += 8
-    if int(fila.get("quantity") or 0) > 0:
+    if fila.get("quantity") is not None:
         puntos += 10
     if not es_desconocido(fila.get("brand")):
         puntos += 10
-    if int(fila.get("age_years") or 0) > 0:
+    if fila.get("age_years") is not None:
         puntos += 8
     if not es_desconocido(fila.get("model")):
         puntos += 4
@@ -72,27 +72,9 @@ def _frescura(fila: dict) -> int:
 
 
 def _confirmaciones(fila: dict, todas: list[dict]) -> int:
-    """Observadores distintos que reportaron el mismo cliente y modalidad.
-
-    Que dos personas que no hablaron entre si vean lo mismo es la senal mas
-    fuerte de que el dato es real, asi que se puntua aparte de la completitud.
-    """
-    cliente = (fila.get("customer") or "").strip().lower()
-    modalidad = (fila.get("modality") or "").strip().lower()
-    if not cliente or not modalidad:
-        return 0
-    observadores = {
-        (o.get("observer") or "").strip().lower()
-        for o in todas
-        if (o.get("customer") or "").strip().lower() == cliente
-        and (o.get("modality") or "").strip().lower() == modalidad
-        and not es_desconocido(o.get("observer"))
-    }
-    if len(observadores) >= 3:
-        return 15
-    if len(observadores) == 2:
-        return 10
-    return 0
+    """Diversidad de observadores en evidencia vinculada y compatible; no prueba independencia real."""
+    n = fila.get("independent_observers", 0)
+    return 15 if n >= 3 else 10 if n == 2 else 0
 
 
 def calcular_confianza(fila: dict, todas: list[dict]) -> tuple[int, str]:
@@ -128,7 +110,7 @@ def desglose(fila: dict, todas: list[dict]) -> dict[str, int]:
 
 def sin_verificar(fila: dict) -> bool:
     dias = dias_desde(fila)
-    return dias is not None and dias > DIAS_SIN_VERIFICAR
+    return dias is None or dias > DIAS_SIN_VERIFICAR
 
 
 def es_oportunidad_renovacion(fila: dict) -> bool:
@@ -139,13 +121,17 @@ def es_oportunidad_renovacion(fila: dict) -> bool:
 def alertas(fila: dict) -> list[str]:
     avisos: list[str] = []
     dias = dias_desde(fila)
-    if sin_verificar(fila):
+    if dias is None:
+        avisos.append("Fecha de visita desconocida")
+    elif sin_verificar(fila):
         avisos.append(f"Sin verificar desde hace {dias} días")
     if es_oportunidad_renovacion(fila):
         edad = int(fila.get("age_years") or 0)
         avisos.append(f"Oportunidad de renovación: {edad} años")
     if es_desconocido(fila.get("brand")):
         avisos.append("Marca desconocida")
-    if int(fila.get("quantity") or 0) <= 0:
+    if fila.get("conflicts", 0):
+        avisos.append("Hay evidencia contradictoria pendiente de revisión")
+    if fila.get("quantity") is None:
         avisos.append("Cantidad sin confirmar")
     return avisos

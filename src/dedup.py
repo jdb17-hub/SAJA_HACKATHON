@@ -34,7 +34,7 @@ def _similitud(equipo: Equipo, fila: dict, cliente: str) -> tuple[float, list[st
             return 0.25, ["misma modalidad pero marca distinta"]
 
     cantidad_fila = int(fila.get("quantity") or 0)
-    if equipo.quantity > 0 and cantidad_fila > 0:
+    if (equipo.quantity or 0) > 0 and cantidad_fila > 0:
         if equipo.quantity == cantidad_fila:
             puntaje += 0.15
             motivos.append(f"misma cantidad ({equipo.quantity})")
@@ -43,7 +43,7 @@ def _similitud(equipo: Equipo, fila: dict, cliente: str) -> tuple[float, list[st
             motivos.append(f"cantidad distinta ({equipo.quantity} vs {cantidad_fila})")
 
     edad_fila = int(fila.get("age_years") or 0)
-    if equipo.age_years > 0 and edad_fila > 0 and abs(equipo.age_years - edad_fila) <= 2:
+    if (equipo.age_years or 0) > 0 and edad_fila > 0 and abs(equipo.age_years - edad_fila) <= 2:
         puntaje += 0.10
         motivos.append("edad compatible")
 
@@ -83,7 +83,7 @@ def _accion_sugerida(equipo: Equipo, fila: dict, puntaje: float) -> str:
     cantidad_fila = int(fila.get("quantity") or 0)
     aporta = (
         (not es_desconocido(equipo.brand) and es_desconocido(fila.get("brand")))
-        or (equipo.age_years > 0 and int(fila.get("age_years") or 0) == 0)
+        or ((equipo.age_years or 0) > 0 and int(fila.get("age_years") or 0) == 0)
         or (not es_desconocido(equipo.model) and es_desconocido(fila.get("model")))
     )
     if aporta:
@@ -102,53 +102,4 @@ DESCRIPCION_ACCION = {
 }
 
 
-def confirmar(fila_id: int, observador: str) -> None:
-    """Registra una confirmacion independiente sobre una fila existente.
-
-    No duplica la cuenta de equipos: solo refresca la fecha y anota quien lo
-    confirmo, que es lo que hace subir el puntaje de confianza.
-    """
-    from datetime import date
-
-    from . import store
-
-    fila = next((f for f in store.todas() if f["observation_id"] == fila_id), None)
-    if not fila:
-        return
-    nota = (fila.get("notes") or "").strip()
-    marca = f"Confirmado por {observador} el {date.today().isoformat()}"
-    store.actualizar(
-        fila_id,
-        visit_date=date.today().isoformat(),
-        status="Confirmed",
-        notes=f"{nota} | {marca}".strip(" |"),
-    )
-    store.recalcular_confianza()
-
-
-def enriquecer(fila_id: int, equipo: Equipo, observador: str) -> None:
-    """Rellena en una fila existente solo los campos que estaban vacios."""
-    from datetime import date
-
-    from . import store
-
-    fila = next((f for f in store.todas() if f["observation_id"] == fila_id), None)
-    if not fila:
-        return
-    cambios: dict = {}
-    if es_desconocido(fila.get("brand")) and not es_desconocido(equipo.brand):
-        cambios["brand"] = equipo.brand
-    if es_desconocido(fila.get("model")) and not es_desconocido(equipo.model):
-        cambios["model"] = equipo.model
-    if int(fila.get("age_years") or 0) == 0 and equipo.age_years > 0:
-        cambios["age_years"] = equipo.age_years
-        cambios["install_year"] = date.today().year - equipo.age_years
-    if int(fila.get("quantity") or 0) == 0 and equipo.quantity > 0:
-        cambios["quantity"] = equipo.quantity
-    if not cambios:
-        return
-    nota = (fila.get("notes") or "").strip()
-    cambios["visit_date"] = date.today().isoformat()
-    cambios["notes"] = f"{nota} | Completado por {observador}".strip(" |")
-    store.actualizar(fila_id, **cambios)
-    store.recalcular_confianza()
+# Las mutaciones se realizan con store.consolidar para conservar la visita y su evidencia.

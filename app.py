@@ -13,7 +13,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src import dedup, followup, nlquery, store
+from src import followup, nlquery, store
+from src import normalize as N
 from src.config import DIAS_SIN_VERIFICAR, EDAD_RENOVACION
 from src.confidence import alertas, desglose, dias_desde, es_oportunidad_renovacion, sin_verificar
 from src.extract import extraer
@@ -65,6 +66,9 @@ def estado_inicial() -> None:
     ss.setdefault("pregunta_actual", None)
     ss.setdefault("ultimo_guardado", None)
     ss.setdefault("revision", 0)
+    ss.setdefault("visit_id", None)
+    ss.setdefault("visit_version", None)
+    ss.setdefault("visit_date", date.today())
 
 
 # Columnas cuyo hueco significa "no se pudo determinar". Se traducen al pintar.
@@ -143,7 +147,9 @@ def barra_lateral(motor) -> None:
 
         st.divider()
         st.session_state.observador = st.text_input("Colaborador", st.session_state.observador)
-        st.caption(f"{store.contar()} observaciones en la base")
+        st.caption(f"{store.contar()} grupos vigentes en la base")
+        if any(r.get("source") == "Seed" for r in store.todas()):
+            st.caption("Incluye datos ficticios de demostración del Excel del reto.")
 
 
 # --- pagina: capturar -------------------------------------------------------
@@ -157,6 +163,21 @@ def pagina_capturar(motor) -> None:
     )
 
     if st.session_state.borrador is None:
+        drafts = store.borradores()
+        if drafts:
+            elegido = st.selectbox("Borradores guardados", drafts,
+                format_func=lambda d: f"#{d['id']} · {d['original'][:80]}")
+            if st.button("Retomar borrador"):
+                payload = elegido['payload']
+                st.session_state.borrador = Borrador.model_validate(payload['borrador'])
+                st.session_state.texto_original = payload.get('texto_original', elegido['original'])
+                st.session_state.conversacion = payload.get('conversacion', [])
+                st.session_state.omitidas = set(payload.get('omitidas', []))
+                st.session_state.observador = payload.get('observer', 'Unknown')
+                st.session_state.fuente = payload.get('source', 'Text')
+                st.session_state.visit_date = date.fromisoformat(payload['visit_date']) if payload.get('visit_date') else None
+                st.session_state.visit_id, st.session_state.visit_version = elegido['id'], elegido['version']
+                _tocar_borrador()
         _entrada_nueva(motor)
     else:
         _revisar_borrador(motor)
@@ -166,6 +187,7 @@ def _entrada_nueva(motor) -> None:
     pestana_texto, pestana_voz = st.tabs(["Escribir", "Dictar"])
 
     with pestana_texto:
+        st.session_state.visit_date = st.date_input("Fecha de la visita", value=st.session_state.visit_date, max_value=date.today())
         texto = st.text_area(
             "¿Qué observaste en la visita?",
             height=130,
@@ -241,13 +263,18 @@ def _procesar(texto: str, fuente: str, motor) -> None:
         st.info("La captura aún no está lista. Tu texto se conserva mientras carga.")
         return
     with st.spinner("Extrayendo datos en el dispositivo..."):
-        borrador = extraer(texto, motor)
+        try:
+            borrador = extraer(texto, motor, estricto=True, fecha=st.session_state.visit_date)
+        except Exception as exc:
+            st.error(f"No se pudo interpretar con QVAC: {exc}. Tu nota sigue disponible para reintentar.")
+            return
     st.session_state.borrador = borrador
     st.session_state.texto_original = texto
     st.session_state.fuente = fuente
     st.session_state.omitidas = set()
     st.session_state.conversacion = [("colaborador", texto)]
     st.session_state.pregunta_actual = followup.siguiente_pregunta(borrador, set())
+    _persistir_borrador()
     st.session_state.revision += 1
     st.rerun()
 
@@ -333,6 +360,18 @@ def _editor_borrador(borrador: Borrador) -> None:
     borrador.city = _campo(c2, "Ciudad", borrador.city, f"ciu{rev}")
     borrador.country = _campo(c3, "País", borrador.country, f"pai{rev}")
     _estado_cliente(borrador.customer)
+    conocidos = {store.identidad(f): f for f in store.todas()}
+    fichas = list(conocidos.values()) + N.catalogo_clientes()
+    opcion = st.selectbox("Seleccionar cliente conocido (opcional)", [None, *fichas],
+        format_func=lambda f: "Selecciona para resolver el nombre o la ubicación" if f is None else f"{f['customer']} · {f['city']} · {f['country']}")
+    if opcion and st.button("Usar este cliente"):
+        borrador.customer, borrador.city, borrador.country = opcion['customer'], opcion['city'], opcion['country']
+        borrador.location_source = "catálogo seleccionado"
+        _tocar_borrador()
+    st.caption(f"Ubicación inicial: {borrador.location_source}. Puedes corregirla; los cambios quedan en el historial.")
+    st.session_state.visit_date = st.date_input("Fecha real de visita", value=st.session_state.visit_date,
+        max_value=date.today(), key=f"fecha{rev}")
+    st.caption("Deja la fecha vacía si no la conoces. Una cantidad o edad vacía significa desconocida; cero es un valor explícito.")
 
     for i, equipo in enumerate(borrador.items):
         with st.container(border=True):
@@ -344,12 +383,12 @@ def _editor_borrador(borrador: Borrador) -> None:
                     format_func=etiqueta, key=f"m{rev}_{i}",
                 )
             )
-            equipo.quantity = f2.number_input("Cantidad", 0, 200, equipo.quantity, key=f"q{rev}_{i}")
+            equipo.quantity = f2.number_input("Cantidad", min_value=0, max_value=200, value=equipo.quantity, key=f"q{rev}_{i}")
             equipo.brand = _campo(f3, "Marca", equipo.brand, f"b{rev}_{i}")
 
             g1, g2, g3 = st.columns([2, 1, 2])
             equipo.model = _campo(g1, "Modelo", equipo.model, f"mo{rev}_{i}")
-            equipo.age_years = g2.number_input("Edad (años)", 0, 40, equipo.age_years, key=f"e{rev}_{i}")
+            equipo.age_years = g2.number_input("Edad (años)", min_value=0, max_value=40, value=equipo.age_years, key=f"e{rev}_{i}")
             estados = [e.value for e in Estado]
             equipo.status = Estado(
                 g3.selectbox(
@@ -370,6 +409,7 @@ def _editor_borrador(borrador: Borrador) -> None:
 
 def _tocar_borrador() -> None:
     """Marca el borrador como cambiado por código y refresca la interfaz."""
+    _persistir_borrador()
     st.session_state.revision += 1
     st.rerun()
 
@@ -379,7 +419,7 @@ def _panel_seguimiento(borrador: Borrador, motor) -> None:
     pendientes = followup.pendientes(borrador, st.session_state.omitidas)
 
     if not pendientes:
-        st.success("No falta ningún dato relevante.")
+        st.success("No quedan preguntas pendientes; los datos omitidos permanecen desconocidos.")
         st.caption(followup.resumen(borrador))
         return
 
@@ -423,95 +463,72 @@ def _panel_seguimiento(borrador: Borrador, motor) -> None:
                     st.write(mensaje)
 
 
+def _persistir_borrador():
+    ss = st.session_state
+    if ss.borrador is None:
+        return
+    payload = {"borrador": ss.borrador.model_dump(mode="json"), "texto_original": ss.texto_original,
+        "observer": ss.observador, "source": ss.fuente,
+        "visit_date": ss.visit_date.isoformat() if ss.visit_date else "",
+        "conversacion": ss.conversacion, "omitidas": sorted(ss.omitidas)}
+    ss.visit_id, ss.visit_version = store.guardar_borrador(payload, ss.visit_id, ss.visit_version)
+
+
 def _panel_guardado(borrador: Borrador, motor) -> None:
-    st.markdown("#### Confirmar y guardar")
-
-    if not borrador.items:
-        # Puede pasar tras resolver duplicados: cada grupo se aplico a una fila
-        # que ya existia, asi que no queda nada nuevo que archivar.
-        st.success("Listo. Toda la observación se aplicó sobre filas existentes.")
-        if st.button("Capturar otra visita", type="primary"):
-            _reiniciar()
+    st.markdown("#### Revisar y consolidar")
+    try:
+        _persistir_borrador()
+    except ValueError as exc:
+        st.error(str(exc))
         return
-
-    if es_desconocido(borrador.customer):
-        # Sin cliente no se puede archivar. Se dice una sola vez y en un sitio,
-        # con lo que si se entendio a la vista para que no parezca que se perdio.
-        st.warning(
-            "**Falta el cliente.** Responde a la pregunta del agente o escribe el "
-            "nombre arriba, y podrás guardar."
-        )
-        st.caption(f"Lo demás quedó capturado: {followup.describir_equipos(borrador)}")
-        if st.button("Descartar y empezar de nuevo"):
-            _reiniciar()
+    st.caption(f"Borrador #{st.session_state.visit_id} guardado. Extracción: {borrador.inference}.")
+    if st.button("Descartar borrador"):
+        store.descartar(st.session_state.visit_id)
+        _reiniciar()
+    if not borrador.items or es_desconocido(borrador.customer):
+        st.info("Identifica el hospital y al menos una modalidad antes de consolidar.")
         return
-
     st.info(followup.resumen(borrador))
-
-    existentes = store.por_cliente(borrador.customer)
-    hay_duplicados = False
-    for i, equipo in enumerate(borrador.items):
-        candidatos = dedup.buscar_duplicados(equipo, borrador.customer, existentes)
-        if not candidatos:
-            continue
-        hay_duplicados = True
-        mejor = candidatos[0]
-        with st.container(border=True):
-            st.warning(
-                f"**Posible duplicado** — {equipo.modality.value} x{equipo.quantity} "
-                f"se parece a la observación #{mejor['observation_id']} "
-                f"({mejor['modality']} x{mejor['quantity']}, {mejor['brand']}, "
-                f"{mejor['observer']}, {mejor['visit_date']}) · similitud {mejor['_score']}"
-            )
-            st.caption("Coincide en: " + ", ".join(mejor["_motivos"]))
-            st.caption(dedup.DESCRIPCION_ACCION[mejor["_accion"]])
-            c1, c2, c3 = st.columns(3)
-            if c1.button("Confirmar la existente", key=f"conf{i}"):
-                dedup.confirmar(mejor["observation_id"], st.session_state.observador)
-                borrador.items.pop(i)
-                _tocar_borrador()
-            if c2.button("Completar la existente", key=f"enr{i}"):
-                dedup.enriquecer(mejor["observation_id"], equipo, st.session_state.observador)
-                borrador.items.pop(i)
-                _tocar_borrador()
-            c3.caption("O guarda igualmente como observación nueva más abajo.")
-
-    c1, c2 = st.columns([1, 3])
-    etiqueta = "Guardar de todas formas" if hay_duplicados else "Guardar observación"
-    if c1.button(etiqueta, type="primary", width="stretch"):
-        ids = _guardar(borrador)
-        st.session_state.ultimo_guardado = ids
-        _reiniciar()
-    if c2.button("Descartar"):
-        _reiniciar()
-
-
-def _guardar(borrador: Borrador) -> list[int]:
-    ids = []
-    for equipo in borrador.items:
-        obs = Observacion(
-            country=borrador.country,
-            city=borrador.city,
-            customer=borrador.customer,
-            observer=st.session_state.observador,
-            visit_date=date.today().isoformat(),
-            modality=equipo.modality.value,
-            quantity=equipo.quantity,
-            brand=equipo.brand,
-            model=equipo.model,
-            age_years=equipo.age_years,
-            status=equipo.status.value,
-            source=st.session_state.fuente,
-            raw_input=st.session_state.texto_original,
-            notes=" | ".join(p for p in [borrador.notes, equipo.notes] if p),
-        )
-        ids.append(store.guardar(obs))
-    store.recalcular_confianza()
-    return ids
+    st.caption("Cada grupo debe representar unidades distintas. No incluyas el total y sus subconjuntos como grupos separados.")
+    existentes = [f for f in store.todas() if store.identidad(f) == store.identidad(borrador.model_dump())]
+    if existentes:
+        st.dataframe(para_mostrar(pd.DataFrame(existentes)[['observation_id','modality','quantity','brand','age_years','visit_date']]),hide_index=True)
+    acciones = {'evidencia':'Vincular evidencia (visita parcial, no cambia cantidades)',
+                'recuento':'Recuento actual (reemplaza las modalidades descritas)',
+                'completar':'Completar campos desconocidos de grupos existentes',
+                'nuevo':'Registrar una flota distinta'}
+    modo = st.selectbox("Acción sobre el inventario", list(acciones) if existentes else ['nuevo','recuento'],
+                        format_func=acciones.get)
+    destinos = {}
+    valido = True
+    if modo in {'evidencia','completar'}:
+        for i, eq in enumerate(borrador.items):
+            opciones = [f for f in existentes if f['modality'] == eq.modality.value]
+            dest = st.selectbox(f"Destino del grupo {i+1}", [None, *opciones], key=f"dest{eq.group_id}",
+                format_func=lambda f: 'Selecciona un grupo' if f is None else f"#{f['observation_id']} · {f['modality']} × {f['quantity']} · {f['brand']}")
+            if dest:
+                destinos[eq.group_id] = dest['observation_id']
+                if not store.compatible(eq.model_dump(),dest):
+                    st.warning("Hay diferencias. Como evidencia se conservarán sin aumentar confianza ni cambiar el inventario.")
+            else:
+                valido = False
+    if modo == 'recuento':
+        valido = st.checkbox("Verifiqué el total de cada modalidad descrita; los grupos no se solapan.")
+    elif modo == 'nuevo' and existentes:
+        valido = st.checkbox("Son equipos distintos de los ya registrados, no otra visita a los mismos equipos.")
+    if st.button("Confirmar y guardar", type="primary", disabled=not valido):
+        try:
+            _persistir_borrador()
+            ids = store.consolidar(st.session_state.visit_id, st.session_state.visit_version, modo, destinos)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.ultimo_guardado = ids
+            _reiniciar()
 
 
 def _reiniciar() -> None:
-    for k in ["borrador", "texto_original", "omitidas", "conversacion", "pregunta_actual"]:
+    for k in ["borrador", "texto_original", "omitidas", "conversacion", "pregunta_actual", "visit_id", "visit_version", "visit_date"]:
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -526,9 +543,10 @@ def pagina_cliente() -> None:
         st.info("Todavía no hay observaciones. Captura una en la pestaña anterior.")
         return
 
-    clientes = sorted(df["customer"].unique())
-    cliente = st.selectbox("Cliente", clientes)
-    sub = df[df["customer"] == cliente].copy()
+    clientes = df.drop_duplicates('customer_key').to_dict('records')
+    cliente = st.selectbox("Cliente", clientes,
+        format_func=lambda r: f"{r['customer']} · {r['city']} · {r['country']}")
+    sub = df[df['customer_key'] == cliente['customer_key']].copy()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Unidades registradas", int(sub["quantity"].sum()))
@@ -540,6 +558,10 @@ def pagina_cliente() -> None:
     ciudad = sub["city"].iloc[0]
     pais = sub["country"].iloc[0]
     st.caption(f"{ciudad}, {pais} · última visita {sub['visit_date'].max()}")
+    st.caption(f"Grupos con cantidad desconocida: {sub['quantity'].isna().sum()}. Las unidades son solo las conocidas.")
+
+    with st.expander("Historial del inventario del cliente"):
+        st.dataframe(para_mostrar(pd.DataFrame(store.historial_cliente(cliente['customer_key']))), hide_index=True)
 
     st.markdown("#### Equipos")
     for _, fila in sub.sort_values("modality").iterrows():
@@ -547,11 +569,11 @@ def pagina_cliente() -> None:
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
             c1.markdown(
-                f"**{etiqueta(fila['modality'])}** × {fila['quantity']}  \n"
+                f"**{etiqueta(fila['modality'])}** × {int(fila['quantity']) if pd.notna(fila['quantity']) else 'cantidad desconocida'}  \n"
                 f"{etiqueta(fila['brand'])} · {etiqueta(fila['model'])}"
             )
-            edad = f"{fila['age_years']} años" if fila["age_years"] else "Edad no identificada"
-            instal = f" (aprox. {fila['install_year']})" if fila["install_year"] else ""
+            edad = f"{fila['age_years']} años" if pd.notna(fila["age_years"]) else "Edad no identificada"
+            instal = f" (aprox. {fila['install_year']})" if pd.notna(fila["install_year"]) else ""
             c2.markdown(
                 f"{edad}{instal}  \n"
                 f"{etiqueta(fila['status'])} · observado por {fila['observer']}"
@@ -559,7 +581,7 @@ def pagina_cliente() -> None:
             c3.markdown(
                 f"Confianza **{fila['confidence_score']}/100** "
                 f"({etiqueta(fila['confidence'])})  \n"
-                f"visto el {fila['visit_date']}"
+                f"Visita: {fila['visit_date'] or 'sin fecha'} · Verificación: {fila['verified_date'] or 'sin fecha'}"
             )
             if avisos:
                 st.caption(" · ".join(avisos))
@@ -567,6 +589,8 @@ def pagina_cliente() -> None:
                 st.write(f"**Nota original:** {fila['raw_input'] or '(no registrada)'}")
                 if fila["notes"]:
                     st.write(f"**Notas:** {fila['notes']}")
+                st.write("**Historial de visitas y correcciones:**")
+                st.json(store.historial(int(fila["observation_id"])), expanded=False)
                 st.write("**Puntaje de confianza:**")
                 st.table(pd.DataFrame([desglose(fila.to_dict(), store.todas())]))
 
@@ -582,7 +606,7 @@ def pagina_panorama() -> None:
         return
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Clientes", df["customer"].nunique())
+    c1.metric("Clientes", df["customer_key"].nunique())
     c2.metric("Unidades", int(df["quantity"].sum()))
     c3.metric("Países", df["country"].nunique())
     oportunidades = df[df["oportunidad"]]
@@ -657,7 +681,7 @@ def pagina_panorama() -> None:
         })
         st.dataframe(para_mostrar(vista), width="stretch", hide_index=True)
 
-    st.markdown(f"#### Datos sin verificar en {DIAS_SIN_VERIFICAR}+ días")
+    st.markdown(f"#### Datos sin fecha o sin verificar en {DIAS_SIN_VERIFICAR}+ días")
     viejas = df[df["sin_verificar"]]
     if viejas.empty:
         st.caption("No hay registros que superen el plazo de verificación.")
@@ -676,9 +700,8 @@ def pagina_panorama() -> None:
         para_mostrar(df.drop(columns=["oportunidad", "sin_verificar"])),
         width="stretch", hide_index=True,
     )
-    ruta = Path(tempfile.gettempdir()) / "base_instalada.csv"
-    store.exportar_csv(ruta)
-    st.download_button("Descargar CSV", ruta.read_bytes(), "base_instalada.csv", "text/csv")
+    csv_data = pd.DataFrame(store.todas()).to_csv(index=False).encode("utf-8-sig")
+    st.download_button("Descargar CSV", csv_data, "base_instalada.csv", "text/csv")
 
 
 # --- pagina: preguntar ------------------------------------------------------
@@ -689,6 +712,7 @@ def pagina_preguntar(motor) -> None:
     st.caption("En lenguaje natural. El modelo traduce la pregunta a un filtro; los números salen de los datos.")
 
     ejemplos = [
+        "Muéstrame solo los de Panamá",
         "clientes en Brasil con resonadores de más de siete años",
         "¿Dónde hay oportunidades de renovación?",
         "¿Cuántos ecógrafos hay en México?",
@@ -704,11 +728,18 @@ def pagina_preguntar(motor) -> None:
         return
 
     with st.spinner("Interpretando en el dispositivo..."):
-        filtro = nlquery.interpretar(pregunta, motor if motor.estado.listo else None)
+        try:
+            filtro = nlquery.interpretar(pregunta, motor if motor.estado.listo else None)
+        except ValueError as exc:
+            st.info(str(exc))
+            return
     resultados = nlquery.aplicar(filtro, store.todas())
 
     st.caption(f"Filtro entendido: **{nlquery.describir_filtro(filtro)}**")
-    st.success(nlquery.resumir(pregunta, resultados, motor))
+    if not resultados and filtro["pais"]:
+        st.info(f"No hay observaciones en {filtro['pais']} que cumplan los filtros indicados.")
+    else:
+        st.success(nlquery.resumir(pregunta, resultados, motor))
 
     if resultados:
         vista = pd.DataFrame(resultados)[

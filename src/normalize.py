@@ -35,6 +35,7 @@ def parecido(a: str, b: str) -> float:
 # --- numerales --------------------------------------------------------------
 
 NUMEROS = {
+    "cero": 0, "zero": 0,
     "un": 1, "uno": 1, "una": 1, "one": 1, "single": 1, "unico": 1,
     "dos": 2, "two": 2, "par": 2, "couple": 2,
     "tres": 3, "three": 3,
@@ -314,6 +315,8 @@ def normalizar_cliente(valor: str) -> tuple[str, dict | None]:
         return DESCONOCIDO, None
 
     clientes = catalogo_clientes()
+    if propios and set(propios) <= {"democare"}:
+        return DESCONOCIDO, None
     puntuados: list[tuple[float, dict]] = []
     for ficha in clientes:
         del_catalogo = tokens_distintivos(ficha["customer"])

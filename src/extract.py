@@ -111,7 +111,7 @@ def _conteos_por_modalidad(texto: str) -> dict[Modalidad, list[int]]:
     return conteos
 
 
-def _edades(texto: str) -> list[int]:
+def _edades(texto: str, fecha=None) -> list[int]:
     """Numeros que van acompanados de una unidad de tiempo, o un ano de instalacion."""
     t = N.clave(texto)
     encontrados: list[int] = []
@@ -123,7 +123,7 @@ def _edades(texto: str) -> list[int]:
     from datetime import date
 
     for anio in re.findall(r"\b(19[89]\d|20[0-4]\d)\b", t):
-        edad = date.today().year - int(anio)
+        edad = (fecha or date.today()).year - int(anio)
         if 0 < edad <= 40:
             encontrados.append(edad)
     return encontrados
@@ -148,31 +148,20 @@ def _cliente(texto: str) -> tuple[str, dict | None]:
     Nombres como 'Hospital DemoCare Pacific' se reconocen aunque el colaborador
     diga solo 'DemoCare Pacific' o los rodee de otras palabras.
     """
-    t = N.clave(texto)
-    generico = {"hospital", "clinica", "centro", "instituto", "medico", "diagnostico"}
-    mejor, puntaje = None, (0.0, 0)
+    tokens = set(N.clave(texto).split())
+    candidatos = []
     for ficha in N.catalogo_clientes():
-        palabras = [p for p in N.clave(ficha["customer"]).split() if len(p) > 3]
-        if not palabras:
-            continue
-        aciertos = [p for p in palabras if p in t]
-        ratio = len(aciertos) / len(palabras)
-        # Se exige al menos una palabra distintiva, no solo "hospital" o "clinica".
-        if not any(p not in generico for p in aciertos):
-            continue
-        # A igualdad de ratio gana el nombre mas especifico: "Hospital DemoCare
-        # Metro North" y "Hospital DemoCare North" encajan igual de bien en el
-        # texto del primero, y quedarse con el corto seria atribuir la
-        # observacion al hospital equivocado.
-        especificidad = len([p for p in aciertos if p not in generico])
-        if (ratio, especificidad) > puntaje:
-            mejor, puntaje = ficha, (ratio, especificidad)
-    if mejor and puntaje[0] >= 0.5:
-        return mejor["customer"], mejor
+        propios = set(N.tokens_distintivos(ficha["customer"]))
+        if propios and propios <= tokens:
+            candidatos.append((len(propios), ficha))
+    candidatos.sort(key=lambda x: -x[0])
+    if candidatos and (len(candidatos) == 1 or candidatos[0][0] > candidatos[1][0]):
+        ficha = candidatos[0][1]
+        return ficha["customer"], ficha
     return DESCONOCIDO, None
 
 
-def leer_pistas(texto: str) -> Pistas:
+def leer_pistas(texto: str, fecha=None) -> Pistas:
     """Pasada deterministica completa. No usa ningun modelo."""
     ciudad, pais = _ubicacion(texto)
     cliente, ficha = _cliente(texto)
@@ -188,7 +177,7 @@ def leer_pistas(texto: str) -> Pistas:
         conteos=_conteos_por_modalidad(texto),
         marcas=_menciones(texto, N.catalogo_marcas()),
         modelos=_menciones(texto, N.catalogo_modelos()),
-        edades=_edades(texto),
+        edades=_edades(texto, fecha),
         estado=N.detectar_estado(texto),
     )
 
@@ -357,7 +346,9 @@ def _fusionar(propuesta: dict, pistas: Pistas, texto: str) -> Borrador:
             eq.status = pistas.estado
     borrador.items = [e for e in equipos if e.modality != Modalidad.UNKNOWN or e.quantity]
     borrador.notes = str(propuesta.get("notes") or "").strip()
-    return borrador
+    borrador.location_source = "catálogo" if pistas.ficha_cliente else "observación"
+    borrador.raw_response = propuesta
+    return _validar_grupos(borrador, pistas, texto)
 
 
 def _posiciones(tokens: list[str], frase: str) -> list[int]:
@@ -449,7 +440,7 @@ def _corregir_cantidades(equipos: list[Equipo], pistas: Pistas) -> list[Equipo]:
         if not grupos or not cantidades:
             continue
         piso, techo = max(cantidades), sum(cantidades)
-        propuesto = sum(g.quantity for g in grupos)
+        propuesto = sum(g.quantity or 0 for g in grupos)
 
         # Mencion repetida: se acepta al LLM si cae en el rango plausible.
         if len(cantidades) > 1 and piso <= propuesto <= techo:
@@ -465,16 +456,16 @@ def _corregir_cantidades(equipos: list[Equipo], pistas: Pistas) -> list[Equipo]:
         # El LLM partio la modalidad en grupos. Se cuadra el total con el que
         # dicta el texto, sin inventar ni perder unidades.
         if propuesto < objetivo:
-            faltan = [g for g in grupos if g.quantity <= 0] or grupos[-1:]
+            faltan = [g for g in grupos if (g.quantity or 0) <= 0] or grupos[-1:]
             base, extra = divmod(objetivo - propuesto, len(faltan))
             for i, g in enumerate(faltan):
-                g.quantity += base + (1 if i < extra else 0)
+                g.quantity = (g.quantity or 0) + base + (1 if i < extra else 0)
         else:
             # Se pasa: pasa al partir "tres resonadores, dos viejos y uno nuevo"
             # en 3 + 1. El grupo mayor es el que suele arrastrar el total.
             sobra = propuesto - objetivo
-            for g in sorted(grupos, key=lambda x: -x.quantity):
-                quita = min(sobra, max(0, g.quantity - 1))
+            for g in sorted(grupos, key=lambda x: -(x.quantity or 0)):
+                quita = min(sobra, max(0, (g.quantity or 0) - 1))
                 g.quantity -= quita
                 sobra -= quita
                 if sobra <= 0:
@@ -505,7 +496,7 @@ def _completar_desde_pistas(equipos: list[Equipo], pistas: Pistas, texto: str) -
             unico.brand = pistas.marcas[0]
         if len(pistas.modelos) == 1 and es_desconocido(unico.model):
             unico.model = pistas.modelos[0]
-        if len(pistas.edades) == 1 and unico.age_years <= 0:
+        if len(pistas.edades) == 1 and (unico.age_years or 0) <= 0:
             unico.age_years = pistas.edades[0]
     return equipos
 
@@ -513,7 +504,7 @@ def _completar_desde_pistas(equipos: list[Equipo], pistas: Pistas, texto: str) -
 # --- API del modulo ---------------------------------------------------------
 
 
-def extraer(texto: str, motor=None) -> Borrador:
+def extraer(texto: str, motor=None, estricto: bool = False, fecha=None) -> Borrador:
     """Convierte una nota de campo en un borrador estructurado.
 
     Si el motor QVAC no esta disponible, las reglas solas ya producen un
@@ -524,7 +515,9 @@ def extraer(texto: str, motor=None) -> Borrador:
     if not texto:
         return Borrador()
 
-    pistas = leer_pistas(texto)
+    if estricto and (motor is None or not motor.estado.listo):
+        raise RuntimeError("QVAC no está listo; no se ejecutó inferencia.")
+    pistas = leer_pistas(texto, fecha)
     propuesta: dict = {}
     if motor is not None and motor.estado.listo:
         from .schema import ESQUEMA_EXTRACCION
@@ -537,11 +530,53 @@ def extraer(texto: str, motor=None) -> Borrador:
                 nombre="observacion",
                 max_tokens=900,
             )
-        except Exception:  # noqa: BLE001 - se sigue con reglas
+        except Exception:
+            if estricto:
+                raise
             propuesta = {}
-    return _fusionar(propuesta, pistas, texto)
+    borrador = _fusionar(propuesta, pistas, texto)
+    borrador.inference = "QVAC" if propuesta else "reglas"
+    borrador.model_id = getattr(motor.estado, "llm_model", "") if motor is not None and propuesta else ""
+    return borrador
 
 
 def extraer_solo_reglas(texto: str) -> Borrador:
     """Version sin modelo, util para tests y para comparar en la demo."""
     return _fusionar({}, leer_pistas(texto), texto)
+
+
+def _validar_grupos(borrador: Borrador, pistas: Pistas, texto: str) -> Borrador:
+    """Separate total and explicitly quantified age subsets; never propagate a partial age."""
+    normal = N.sin_acentos(texto).lower()
+    for modalidad, conteos in pistas.conteos.items():
+        grupos = [e for e in borrador.items if e.modality == modalidad]
+        if not grupos:
+            continue
+        terminos = "|".join(re.escape(t) for t in sorted(N.terminos_de(modalidad), key=len, reverse=True))
+        patron = rf"\b(\w+) de (?:los |las )?(?:{terminos})\b[^.;]*?\b(\w+) (?:anos?|years?)\b"
+        detalle = re.search(patron, normal)
+        if detalle and conteos:
+            cantidad, edad = N.a_numero(detalle[1]), N.a_numero(detalle[2])
+            total = max(conteos)
+            if cantidad is not None and edad is not None and 0 < cantidad <= total and 0 <= edad <= 40:
+                borrador.items = [e for e in borrador.items if e.modality != modalidad]
+                borrador.items.append(Equipo(modality=modalidad, quantity=cantidad, age_years=edad,
+                    status=N.detectar_estado(detalle[0])))
+                if total > cantidad:
+                    borrador.items.append(Equipo(modality=modalidad, quantity=total-cantidad,
+                        status=Estado.REPORTADO))
+                continue
+        # The status describes this modality's clause, not uncertainty elsewhere in the note.
+        clausulas = re.split(r"[.;]|\by\b|\band\b", texto, flags=re.I)
+        propias = [c for c in clausulas if N.detectar_modalidad(c) == modalidad]
+        if len(propias) == 1 and len(grupos) == 1:
+            grupos[0].status = N.detectar_estado(propias[0])
+    for eq in borrador.items:
+        if eq.quantity == 0:
+            eq.quantity = 0 if 0 in pistas.conteos.get(eq.modality, []) else None
+        if eq.age_years == 0 or eq.age_years is None:
+            clausulas = re.split(r"[.;]|\by\b|\band\b", texto, flags=re.I)
+            explicito = any(N.detectar_modalidad(c) == eq.modality and
+                re.search(r"\b(?:0|cero|zero) (?:anos?|years?)\b", N.clave(c)) for c in clausulas)
+            eq.age_years = 0 if explicito and sum(e.modality == eq.modality for e in borrador.items) == 1 else None
+    return borrador

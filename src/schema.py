@@ -2,9 +2,9 @@
 de un cliente, igual que la hoja `Dummy Installed Base` del Excel."""
 from __future__ import annotations
 
-from datetime import date
 from enum import Enum
 from typing import Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -59,22 +59,17 @@ ETIQUETA_ES = {
 
 
 class Equipo(BaseModel):
-    """Un grupo de equipos observado. `quantity=0` y `Unknown` significan
-    'no se sabe todavía' — nunca se inventa un valor."""
+    """Un grupo de equipos observado. None significa desconocido; cero es explícito."""
 
+    group_id: str = Field(default_factory=lambda: uuid4().hex)
     modality: Modalidad = Modalidad.UNKNOWN
-    quantity: int = 0
+    quantity: int | None = Field(default=None, ge=0, le=200)
     brand: str = DESCONOCIDO
     model: str = DESCONOCIDO
-    age_years: int = 0
+    age_years: int | None = Field(default=None, ge=0, le=40)
     status: Estado = Estado.DESCONOCIDO
     notes: str = ""
 
-    @property
-    def anio_instalacion(self) -> Optional[int]:
-        if self.age_years <= 0:
-            return None
-        return date.today().year - self.age_years
 
 
 class Borrador(BaseModel):
@@ -86,6 +81,10 @@ class Borrador(BaseModel):
     country: str = DESCONOCIDO
     items: list[Equipo] = Field(default_factory=list)
     notes: str = ""
+    location_source: str = "observación"
+    inference: str = "reglas"
+    model_id: str = ""
+    raw_response: dict = Field(default_factory=dict)
 
     def campos_faltantes(self) -> list[str]:
         faltan = []
@@ -100,11 +99,11 @@ class Borrador(BaseModel):
         for i, it in enumerate(self.items):
             if it.modality == Modalidad.UNKNOWN:
                 faltan.append(f"items.{i}.modality")
-            if it.quantity <= 0:
+            if it.quantity is None:
                 faltan.append(f"items.{i}.quantity")
             if es_desconocido(it.brand):
                 faltan.append(f"items.{i}.brand")
-            if it.age_years <= 0:
+            if it.age_years is None:
                 faltan.append(f"items.{i}.age_years")
             if es_desconocido(it.model):
                 faltan.append(f"items.{i}.model")
@@ -121,10 +120,10 @@ class Observacion(BaseModel):
     observer: str = DESCONOCIDO
     visit_date: str = ""
     modality: str = Modalidad.UNKNOWN.value
-    quantity: int = 0
+    quantity: int | None = Field(default=None, ge=0, le=200)
     brand: str = DESCONOCIDO
     model: str = DESCONOCIDO
-    age_years: int = 0
+    age_years: int | None = Field(default=None, ge=0, le=40)
     install_year: Optional[int] = None
     confidence: str = Confianza.BAJA.value
     confidence_score: int = 0

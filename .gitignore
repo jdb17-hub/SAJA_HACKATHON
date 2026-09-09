@@ -7,3 +7,8 @@ data/observaciones.db
 # Lo unico que se excluye son los secretos.
 .streamlit/secrets.toml
 *.xlsx
+
+# Respaldos y archivos temporales de SQLite
+*.db.pre-v2.bak
+*.db-wal
+*.db-shm
