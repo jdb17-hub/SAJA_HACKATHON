@@ -6,6 +6,7 @@ transcripción de voz) corre en este dispositivo a traves de QVAC.
 from __future__ import annotations
 
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src import followup, nlquery, store
+from src import conflicts, followup, geo, insights, nlquery, store
 from src import normalize as N
 from src.config import DIAS_SIN_VERIFICAR, EDAD_RENOVACION
 from src.confidence import alertas, desglose, dias_desde, es_oportunidad_renovacion, sin_verificar
@@ -69,6 +70,8 @@ def estado_inicial() -> None:
     ss.setdefault("visit_id", None)
     ss.setdefault("visit_version", None)
     ss.setdefault("visit_date", date.today())
+    ss.setdefault("inicio_captura", None)
+    ss.setdefault("segundos_captura", None)
 
 
 # Columnas cuyo hueco significa "no se pudo determinar". Se traducen al pintar.
@@ -262,6 +265,11 @@ def _procesar(texto: str, fuente: str, motor) -> None:
     if not motor.estado.listo:
         st.info("La captura aún no está lista. Tu texto se conserva mientras carga.")
         return
+    # El cronómetro responde a la pregunta de adopción del reto: por qué alguien
+    # usaría esto después de cada visita. La respuesta tiene que ser un número, y
+    # solo cuenta si empieza en la nota y acaba cuando el dato queda guardado.
+    if st.session_state.inicio_captura is None:
+        st.session_state.inicio_captura = time.time()
     with st.spinner("Extrayendo datos en el dispositivo..."):
         try:
             borrador = extraer(texto, motor, estricto=True, fecha=st.session_state.visit_date)
@@ -524,10 +532,13 @@ def _panel_guardado(borrador: Borrador, motor) -> None:
             st.error(str(exc))
         else:
             st.session_state.ultimo_guardado = ids
+            if st.session_state.inicio_captura:
+                st.session_state.segundos_captura = time.time() - st.session_state.inicio_captura
             _reiniciar()
 
 
 def _reiniciar() -> None:
+    st.session_state.inicio_captura = None
     for k in ["borrador", "texto_original", "omitidas", "conversacion", "pregunta_actual", "visit_id", "visit_version", "visit_date"]:
         st.session_state.pop(k, None)
     st.rerun()
@@ -563,7 +574,23 @@ def pagina_cliente() -> None:
     with st.expander("Historial del inventario del cliente"):
         st.dataframe(para_mostrar(pd.DataFrame(store.historial_cliente(cliente['customer_key']))), hide_index=True)
 
-    st.markdown("#### Equipos")
+    # El panorama primero, el detalle debajo: quien abre la ficha quiere saber
+    # que hay instalado, no leer grupo por grupo. La edad va en rango porque una
+    # flota comprada en tandas distintas no tiene una sola edad.
+    st.markdown("#### Panorama de equipos")
+    resumen = insights.resumen_cliente(sub.to_dict("records"))
+    st.dataframe(
+        pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in resumen]),
+        width="stretch", hide_index=True,
+    )
+    if any(r["_oportunidad"] for r in resumen):
+        modalidades = ", ".join(r["Tipo de equipo"] for r in resumen if r["_oportunidad"])
+        st.caption(f"Ventana de renovación en {modalidades}")
+    if any(r["_sin_verificar"] for r in resumen):
+        st.caption(f"Hay datos sin verificar desde hace más de {DIAS_SIN_VERIFICAR} días")
+
+    st.markdown("#### Grupos individuales")
+    st.caption("De dónde sale cada número del panorama de arriba.")
     for _, fila in sub.sort_values("modality").iterrows():
         avisos = alertas(fila.to_dict())
         with st.container(border=True):
@@ -593,6 +620,194 @@ def pagina_cliente() -> None:
                 st.json(store.historial(int(fila["observation_id"])), expanded=False)
                 st.write("**Puntaje de confianza:**")
                 st.table(pd.DataFrame([desglose(fila.to_dict(), store.todas())]))
+
+
+# --- pagina: mapa -----------------------------------------------------------
+
+TODOS = "Todos"
+
+
+def pagina_mapa() -> None:
+    """Navegación Región → País → Ciudad → Cliente, como pide el reto."""
+    st.header("Mapa de la base instalada")
+    st.caption(
+        "Navega de la región al equipo concreto. El tamaño del punto es la cantidad "
+        "de unidades y el color avisa de flotas envejecidas."
+    )
+
+    filas = store.todas()
+    if not filas:
+        st.info("Todavía no hay observaciones.")
+        return
+
+    sedes = geo.sedes(filas)
+    if not sedes:
+        st.warning("Ninguna observación tiene una ciudad que se pueda situar en el mapa.")
+        return
+
+    # --- filtros encadenados: cada nivel restringe al siguiente
+    f1, f2, f3 = st.columns(3)
+    regiones = [TODOS] + sorted({s["region"] for s in sedes})
+    region = f1.selectbox("Región", regiones)
+    visibles = [s for s in sedes if region in (TODOS, s["region"])]
+
+    paises = [TODOS] + sorted({s["pais_es"] for s in visibles})
+    pais = f2.selectbox("País", paises)
+    visibles = [s for s in visibles if pais in (TODOS, s["pais_es"])]
+
+    ciudades = [TODOS] + sorted({s["city"] for s in visibles if s["city"]})
+    ciudad = f3.selectbox("Ciudad", ciudades)
+    visibles = [s for s in visibles if ciudad in (TODOS, s["city"])]
+
+    if not visibles:
+        st.info("No hay clientes con esa combinación.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Clientes", len(visibles))
+    c2.metric("Unidades", sum(s["unidades"] for s in visibles))
+    c3.metric("Ciudades", len({s["city"] for s in visibles}))
+    c4.metric("Con flota envejecida", sum(1 for s in visibles if s["oportunidades"]))
+
+    _dibujar_mapa(visibles)
+
+    ausentes = geo.sin_coordenadas(filas)
+    if ausentes:
+        # Un cliente que desaparece del mapa sin avisar parece un dato perdido.
+        st.caption(f"Sin ubicar por falta de ciudad: {', '.join(ausentes)}")
+
+    st.markdown("#### Clientes en la selección")
+    tabla = pd.DataFrame(
+        [
+            {
+                "Cliente": s["customer"],
+                "Ciudad": s["city"],
+                "País": s["pais_es"],
+                "Unidades": s["unidades"],
+                "Modalidades": ", ".join(etiqueta(m) for m in s["modalidades"]),
+                "Edad media": f"{s['edad_media']:.1f} años" if s["edad_media"] else NO_IDENTIFICADO,
+                "Confianza": f"{s['confianza_media']:.0f}/100",
+                "Última visita": s["ultima_visita"],
+            }
+            for s in visibles
+        ]
+    )
+    st.dataframe(tabla, width="stretch", hide_index=True)
+
+    # --- ultimo nivel de la jerarquia: el equipo instalado de un cliente
+    st.markdown("#### Equipos del cliente")
+    elegido = st.selectbox(
+        "Cliente", [s["customer"] for s in visibles], key="cliente_mapa",
+        label_visibility="collapsed",
+    )
+    detalle = insights.resumen_cliente(store.por_cliente(elegido))
+    st.dataframe(
+        pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in detalle]),
+        width="stretch", hide_index=True,
+    )
+
+
+def _dibujar_mapa(sedes: list[dict]) -> None:
+    """Pinta las sedes con pydeck.
+
+    Los mosaicos del mapa se descargan de internet. Son un recurso de interfaz,
+    no inferencia, así que no tocan la regla del reto; pero para que la demo sin
+    conexión no se vea rota, si no cargan quedan los puntos sobre fondo liso.
+    """
+    import pydeck as pdk
+
+    datos = [
+        {
+            "lat": s["lat"],
+            "lon": s["lon"],
+            "cliente": s["customer"],
+            "ciudad": s["city"],
+            "pais": s["pais_es"],
+            "unidades": s["unidades"],
+            "modalidades": ", ".join(etiqueta(m) for m in s["modalidades"]),
+            "confianza": f"{s['confianza_media']:.0f}/100",
+            "radio": 24_000 + s["unidades"] * 9_000,
+            # Ámbar cuando hay equipos en ventana de renovación, azul si no.
+            "color": [214, 143, 60, 200] if s["oportunidades"] else [59, 111, 212, 200],
+        }
+        for s in sedes
+    ]
+
+    latitudes = [d["lat"] for d in datos]
+    longitudes = [d["lon"] for d in datos]
+    vista = pdk.ViewState(
+        latitude=sum(latitudes) / len(latitudes),
+        longitude=sum(longitudes) / len(longitudes),
+        zoom=2.4 if len(datos) > 3 else 5,
+    )
+    capa = pdk.Layer(
+        "ScatterplotLayer",
+        data=datos,
+        get_position="[lon, lat]",
+        get_fill_color="color",
+        get_radius="radio",
+        pickable=True,
+        opacity=0.75,
+        stroked=True,
+        get_line_color=[255, 255, 255, 120],
+        line_width_min_pixels=1,
+    )
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[capa],
+            initial_view_state=vista,
+            map_style="light",
+            tooltip={
+                "html": "<b>{cliente}</b><br/>{ciudad}, {pais}<br/>"
+                "{unidades} unidades · {modalidades}<br/>Confianza {confianza}",
+            },
+        )
+    )
+    st.caption("🟠 con equipos en ventana de renovación · 🔵 flota reciente")
+
+
+# --- pagina: conflictos -----------------------------------------------------
+
+
+def pagina_conflictos() -> None:
+    """Grupos sobre los que las visitas no se ponen de acuerdo."""
+    st.header("Conflictos entre observaciones")
+    st.caption(
+        "Un duplicado es que dos personas cuenten lo mismo; un conflicto es que "
+        "cuenten cosas distintas. Mientras siga abierto, el dato se enseña como dudoso."
+    )
+
+    filas = store.todas()
+    abiertos = conflicts.abiertos(filas)
+
+    if not abiertos:
+        st.success("No hay conflictos abiertos: las observaciones son compatibles entre sí.")
+        st.caption(
+            "Aparecerán aquí en cuanto una visita registre cantidades, antigüedades "
+            "o marcas que no cuadren con el grupo vigente del mismo cliente."
+        )
+        return
+
+    st.warning(f"{len(abiertos)} grupo(s) con evidencia en desacuerdo, del más grave al menos.")
+
+    for conflicto in abiertos:
+        fila = conflicto["fila"]
+        with st.container(border=True):
+            st.markdown(
+                f"**{fila['customer']} — {etiqueta(fila['modality'])}**  ·  "
+                f"no cuadra en {', '.join(conflicto['motivos'])}"
+            )
+            st.markdown(f"**Vigente ahora**  \n{conflicts.resumen(fila)}")
+
+            for propuesta, motivos in conflicto["versiones"]:
+                st.markdown(f"**Otra visita dijo**  \n{conflicts.resumen(propuesta)}")
+                st.caption("Difiere en: " + ", ".join(motivos))
+                if propuesta.get("_original"):
+                    st.caption(f"Nota original: {propuesta['_original']}")
+
+            st.info(conflicts.COMO_SE_RESUELVE)
+            with st.expander("Historial completo de este grupo"):
+                st.json(store.historial(int(fila["observation_id"])), expanded=False)
 
 
 # --- pagina: panorama -------------------------------------------------------
@@ -694,6 +909,32 @@ def pagina_panorama() -> None:
         })
         st.dataframe(para_mostrar(vista), width="stretch", hide_index=True)
 
+    filas_panel = df.to_dict("records")
+    izq2, der2 = st.columns(2)
+
+    with izq2:
+        st.markdown("#### Clientes con información incompleta")
+        st.caption("A quién conviene volver a preguntar en la próxima visita.")
+        incompletos = insights.clientes_incompletos(filas_panel)
+        if not incompletos:
+            st.caption("Ninguno: todas las fichas tienen marca, modelo, cantidad y antigüedad.")
+        else:
+            st.dataframe(
+                pd.DataFrame(
+                    [{k: v for k, v in r.items() if not k.startswith("_")} for r in incompletos]
+                ),
+                width="stretch", hide_index=True,
+            )
+
+    with der2:
+        st.markdown("#### Sitios actualizados recientemente")
+        st.caption("Qué se ha visitado últimamente y quién lo reportó.")
+        recientes = insights.sitios_recientes(filas_panel)
+        if not recientes:
+            st.caption("Todavía no hay visitas registradas.")
+        else:
+            st.dataframe(para_mostrar(pd.DataFrame(recientes)), width="stretch", hide_index=True)
+
     st.divider()
     st.markdown("#### Base de datos completa")
     st.dataframe(
@@ -769,6 +1010,33 @@ def pagina_preguntar(motor) -> None:
 # --- pagina: sistema --------------------------------------------------------
 
 
+# Las siete etapas que el reto pide demostrar de punta a punta, con el fichero
+# que hace cada una. Sirve para que se vea de un golpe que el recorrido completo
+# está cubierto y dónde mirar en el código.
+PIPELINE = [
+    ("Capturar", "Voz o texto, como se lo contarías a un compañero", "app.py"),
+    ("Entender", "Whisper y el LLM, en este dispositivo", "qvac_engine.py"),
+    ("Estructurar", "Reglas + JSON Schema, sin inventar datos", "extract.py"),
+    ("Validar", "Preguntas por lo que falta, duplicados y conflictos", "followup.py · conflicts.py"),
+    ("Guardar", "Grupos vigentes con evidencia e historial", "store.py"),
+    ("Visualizar", "Ficha de cliente, mapa y panel", "insights.py · geo.py"),
+    ("Generar valor", "Oportunidades y consultas en lenguaje natural", "nlquery.py"),
+]
+
+
+def _diagrama_pipeline() -> None:
+    st.markdown("#### El recorrido completo")
+    st.caption(
+        "Capturar → Entender → Estructurar → Validar → Guardar → Visualizar → Generar valor"
+    )
+    columnas = st.columns(len(PIPELINE))
+    for columna, (etapa, que_hace, donde) in zip(columnas, PIPELINE):
+        with columna:
+            st.markdown(f"**{etapa}**")
+            st.caption(que_hace)
+            st.caption(f"`{donde}`")
+
+
 def pagina_sistema(motor) -> None:
     st.header("Motor y cumplimiento")
     estado = motor.estado
@@ -777,6 +1045,8 @@ def pagina_sistema(motor) -> None:
     c1.metric("Estado", "Activo" if estado.listo else "Error" if estado.error else "Preparando")
     c2.metric("Inferencias", estado.inferencias)
     c3.metric("Última latencia", f"{estado.ultima_latencia:.2f} s" if estado.ultima_latencia else "-")
+
+    _diagrama_pipeline()
 
     st.markdown("#### Regla técnica del reto")
     st.markdown(
@@ -836,18 +1106,26 @@ def main() -> None:
     barra_lateral(motor)
 
     if st.session_state.ultimo_guardado:
-        st.toast(f"Guardadas {len(st.session_state.ultimo_guardado)} observaciones")
+        cuantas = len(st.session_state.ultimo_guardado)
+        segundos = st.session_state.segundos_captura
+        tiempo = f" en {segundos:.0f} s" if segundos else ""
+        st.toast(f"Guardadas {cuantas} observaciones{tiempo}")
         st.session_state.ultimo_guardado = None
+        st.session_state.segundos_captura = None
 
-    capturar, cliente, panorama, preguntar, sistema = st.tabs(
-        ["Capturar", "Cliente", "Panorama", "Preguntar", "Motor"]
+    capturar, cliente, mapa, panorama, conflictos, preguntar, sistema = st.tabs(
+        ["Capturar", "Cliente", "Mapa", "Panorama", "Conflictos", "Preguntar", "Motor"]
     )
     with capturar:
         pagina_capturar(motor)
     with cliente:
         pagina_cliente()
+    with mapa:
+        pagina_mapa()
     with panorama:
         pagina_panorama()
+    with conflictos:
+        pagina_conflictos()
     with preguntar:
         pagina_preguntar(motor)
     with sistema:
