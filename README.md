@@ -55,7 +55,10 @@ ficticios.
 - **Prueba directa:** arranca la app, carga el modelo, **desconecta el wifi** y
   sigue capturando observaciones. Funciona igual.
 
-Lo único que usa la red es la descarga inicial del fichero del modelo, una vez.
+Lo único que usa la red es la descarga inicial del fichero del modelo, una vez,
+y los mosaicos cartográficos de la pestaña *Mapa*. Esos mosaicos son un recurso
+de interfaz, no inferencia, así que no tocan la regla; y sin conexión el mapa
+sigue situando los clientes, solo que sobre fondo liso.
 
 ```bash
 # Comprobar que no hay llamadas a proveedores de inferencia en la nube
@@ -195,6 +198,40 @@ contra lo que ya hay del mismo cliente y ofrece tres salidas:
 Marcas distintas para la misma modalidad bajan la similitud: un hospital puede
 tener perfectamente un CT de dos fabricantes.
 
+### Conflictos
+
+Un duplicado es que dos personas cuenten lo mismo. Un **conflicto** es que
+cuenten cosas distintas del mismo equipo, y es otro problema: el duplicado infla
+la cuenta, el conflicto la hace dudosa. `src/conflicts.py` los detecta por
+cantidad, antigüedad y modelo, y los ordena por gravedad — pesa más el
+desacuerdo en cantidad, porque mueve el tamaño de la oportunidad.
+
+Se ignoran los pares del mismo observador: que alguien registre dos veces
+números distintos es una corrección suya, no una discrepancia entre fuentes.
+
+Un conflicto no se resuelve solo, así que la pestaña ofrece tres salidas:
+quedarse con una de las dos, o marcar que **ambas son correctas** cuando el
+desacuerdo tiene explicación (dos flotas parecidas, o equipos añadidos entre
+visitas). Sin esa tercera salida el mismo aviso reaparecería siempre y la lista
+dejaría de mirarse. La observación descartada queda registrada en la nota de la
+que se queda: sin ese rastro, mañana nadie sabría que hubo discrepancia.
+
+### Mapa y Customer 360
+
+El reto pide navegar **Región → País → Ciudad → Cliente → Equipos**, y eso es la
+pestaña *Mapa*: filtros encadenados sobre un mapa donde el tamaño del punto es
+la cantidad de unidades y el color avisa de flotas envejecidas.
+
+Las coordenadas son una tabla local (`src/geo.py`) a propósito. Geocodificar
+contra un servicio externo mandaría los nombres de los clientes fuera del
+equipo, que es justo lo que esta aplicación evita.
+
+La ficha de cliente abre con el **panorama por modalidad** — tipo de equipo,
+cantidad, edad aproximada, marcas y confianza — y debajo las observaciones
+individuales de las que sale cada número. La edad va en **rango** y no en
+promedio: una flota comprada en tandas distintas no tiene *una* edad, y
+promediarla esconde justo lo interesante, que es que hay equipos viejos.
+
 ### Consultas en lenguaje natural
 
 *"clientes en Brasil con resonadores de más de siete años"*
@@ -210,16 +247,19 @@ reglas, porque *"más de siete"* es `>= 8` y ahí el modelo se equivoca a menudo
 ## Estructura
 
 ```
-app.py                    interfaz Streamlit (5 pestañas)
+app.py                    interfaz Streamlit (7 pestañas)
 src/
   qvac_engine.py          ← único punto de inferencia de todo el proyecto
   config.py               modelos, rutas, umbrales de negocio
-  schema.py               modelo de datos + JSON Schema de extracción
+  schema.py               modelo de datos + JSON Schema + etiquetas de pantalla
   normalize.py            numerales, sinónimos, catálogos, fuzzy matching
   extract.py              pipeline híbrido reglas + LLM
   followup.py             siguiente pregunta más valiosa
   confidence.py           puntaje 0-100 y alertas
   dedup.py                detección de duplicados
+  conflicts.py            observaciones que se contradicen, y cómo cerrarlas
+  insights.py             Customer 360 y analíticas del panel
+  geo.py                  jerarquía geográfica y coordenadas del mapa
   nlquery.py              consultas en lenguaje natural
   audio.py                detección de formato de la grabación
   store.py                SQLite
@@ -309,6 +349,11 @@ y se vuelve a extraer, sin repetir la grabación.
   lento pero bastante más preciso.
 - La captura por foto de placas (OCR) no está implementada. QVAC lo soporta y
   encajaría en `qvac_engine.py` sin tocar el resto.
+- El mapa necesita `pydeck` y los mosaicos vienen de internet. Sin conexión los
+  clientes siguen situándose, pero sin cartografía de fondo.
+- Las coordenadas cubren las capitales de Latinoamérica y las ciudades del
+  dataset. Un cliente en una ciudad que no esté en la tabla cae al centro de su
+  país, y si tampoco se conoce el país se lista aparte en vez de desaparecer.
 - La inferencia delegada por P2P tampoco: la app usa el modo on-device puro,
   que ya cumple la regla del reto.
 - Los umbrales de renovación (10 años) y de dato caducado (180 días) están
