@@ -102,6 +102,26 @@ def para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
     return copia
 
 
+# Etiquetas del menú de las gráficas. Lo dibuja Vega-Embed, no Streamlit, y sale
+# en inglés salvo que se le pasen traducidas dentro del propio spec.
+MENU_GRAFICA = {
+    "embedOptions": {
+        "i18n": {
+            "PNG_ACTION": "Guardar como PNG",
+            "SVG_ACTION": "Guardar como SVG",
+            "SOURCE_ACTION": "Ver el código",
+            "COMPILED_ACTION": "Ver el Vega compilado",
+            "EDITOR_ACTION": "Abrir en el editor de Vega",
+        }
+    }
+}
+
+
+def grafica(chart, **kwargs) -> None:
+    """Pinta una gráfica con el menú en español."""
+    st.altair_chart(chart.properties(usermeta=MENU_GRAFICA), **kwargs)
+
+
 def df_observaciones() -> pd.DataFrame:
     filas = store.todas()
     if not filas:
@@ -159,10 +179,6 @@ def barra_lateral(motor) -> None:
 
 def pagina_capturar(motor) -> None:
     st.header("Capturar observación")
-    st.caption(
-        "Cuenta lo que viste como se lo contarías a un compañero. "
-        "El agente extrae los datos, pregunta lo que falte y avisa si ya estaba registrado."
-    )
 
     if st.session_state.borrador is None:
         drafts = store.borradores()
@@ -709,7 +725,6 @@ def pagina_cliente() -> None:
         st.caption(f"Hay datos sin verificar desde hace más de {DIAS_SIN_VERIFICAR} días")
 
     st.markdown("#### Grupos individuales")
-    st.caption("De dónde sale cada número del panorama de arriba.")
     for _, fila in sub.sort_values("modality").iterrows():
         avisos = alertas(fila.to_dict())
         with st.container(border=True):
@@ -748,11 +763,6 @@ TODOS = "Todos"
 
 def pagina_mapa() -> None:
     """Navegación Región → País → Ciudad → Cliente, como pide el reto."""
-    st.header("Mapa de la base instalada")
-    st.caption(
-        "Navega de la región al equipo concreto. El tamaño del punto es la cantidad "
-        "de unidades y el color avisa de flotas envejecidas."
-    )
 
     filas = store.todas()
     if not filas:
@@ -846,8 +856,8 @@ def _dibujar_mapa(sedes: list[dict]) -> None:
             "modalidades": ", ".join(etiqueta(m) for m in s["modalidades"]),
             "confianza": f"{s['confianza_media']:.0f}/100",
             "radio": 24_000 + s["unidades"] * 9_000,
-            # Ámbar cuando hay equipos en ventana de renovación, azul si no.
-            "color": [214, 143, 60, 200] if s["oportunidades"] else [59, 111, 212, 200],
+            # Rojo cuando hay equipos en ventana de renovación, azul si no.
+            "color": [201, 61, 58, 215] if s["oportunidades"] else [59, 111, 212, 200],
         }
         for s in sedes
     ]
@@ -882,7 +892,7 @@ def _dibujar_mapa(sedes: list[dict]) -> None:
             },
         )
     )
-    st.caption("Ámbar: con equipos en ventana de renovación. Azul: flota reciente.")
+    st.caption("Rojo: con equipos en ventana de renovación. Azul: flota reciente.")
 
 
 # --- pagina: conflictos -----------------------------------------------------
@@ -933,7 +943,7 @@ def pagina_conflictos() -> None:
 
 
 def pagina_panorama() -> None:
-    st.header("Panorama entre clientes")
+    st.header("Análisis entre clientes")
     df = df_observaciones()
     if df.empty:
         st.info("Todavía no hay observaciones.")
@@ -962,7 +972,7 @@ def pagina_panorama() -> None:
         )
         .properties(height=max(220, 34 * df["country"].nunique()))
     )
-    st.altair_chart(grafico, width="stretch")
+    grafica(grafico, width="stretch")
 
     izq, der = st.columns(2)
     with izq:
@@ -983,7 +993,7 @@ def pagina_panorama() -> None:
                 )
                 .properties(height=260)
             )
-            st.altair_chart(hist, width="stretch")
+            grafica(hist, width="stretch")
         else:
             st.caption("Sin edades registradas todavía.")
 
@@ -991,7 +1001,7 @@ def pagina_panorama() -> None:
         st.markdown("#### Marcas instaladas")
         marcas = df[df["brand"] != "Unknown"].groupby("brand", as_index=False)["quantity"].sum()
         if not marcas.empty:
-            st.altair_chart(
+            grafica(
                 alt.Chart(marcas).mark_bar(color="#3b6fd4").encode(
                     x=alt.X("quantity:Q", title="Unidades"),
                     y=alt.Y("brand:N", title=None, sort="-x"),
@@ -1033,7 +1043,6 @@ def pagina_panorama() -> None:
 
     with izq2:
         st.markdown("#### Clientes con información incompleta")
-        st.caption("A quién conviene volver a preguntar en la próxima visita.")
         incompletos = insights.clientes_incompletos(filas_panel)
         if not incompletos:
             st.caption("Ninguno: todas las fichas tienen marca, modelo, cantidad y antigüedad.")
@@ -1047,7 +1056,6 @@ def pagina_panorama() -> None:
 
     with der2:
         st.markdown("#### Sitios actualizados recientemente")
-        st.caption("Qué se ha visitado últimamente y quién lo reportó.")
         recientes = insights.sitios_recientes(filas_panel)
         if not recientes:
             st.caption("Todavía no hay visitas registradas.")
@@ -1068,8 +1076,7 @@ def pagina_panorama() -> None:
 
 
 def pagina_preguntar(motor) -> None:
-    st.header("Preguntar a la base instalada")
-    st.caption("En lenguaje natural. El modelo traduce la pregunta a un filtro; los números salen de los datos.")
+    st.header("Hazle preguntas a la base de datos")
 
     ejemplos = [
         "Muéstrame solo los de Panamá",
@@ -1117,7 +1124,7 @@ def pagina_preguntar(motor) -> None:
                 filtro["agrupar_por"]
             ]
             agrupado = pd.DataFrame(resultados).groupby(columna, as_index=False)["quantity"].sum()
-            st.altair_chart(
+            grafica(
                 alt.Chart(agrupado).mark_bar(color="#2e9e83").encode(
                     x=alt.X("quantity:Q", title="Unidades"),
                     y=alt.Y(f"{columna}:N", title=None, sort="-x"),
@@ -1157,7 +1164,7 @@ def _diagrama_pipeline() -> None:
 
 
 def pagina_sistema(motor) -> None:
-    st.header("Motor y cumplimiento")
+    st.header("Sistema y cumplimiento")
     estado = motor.estado
 
     c1, c2, c3 = st.columns(3)
@@ -1233,7 +1240,7 @@ def main() -> None:
         st.session_state.segundos_captura = None
 
     capturar, cliente, mapa, panorama, conflictos, preguntar, sistema = st.tabs(
-        ["Capturar", "Cliente", "Mapa", "Panorama", "Conflictos", "Preguntar", "Motor"]
+        ["Capturar", "Cliente", "Mapa", "Análisis", "Conflictos", "Consultas", "Sistema"]
     )
     with capturar:
         pagina_capturar(motor)

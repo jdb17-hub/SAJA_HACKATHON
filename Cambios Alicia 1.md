@@ -129,6 +129,34 @@ reportó cada persona y en qué difiere.
 
 ---
 
+## 5. Limpieza de títulos y subtítulos
+
+Se retiraron los subtítulos descriptivos de Capturar, Grupos individuales, Mapa,
+Consultas, Clientes con información incompleta y Sitios actualizados
+recientemente. Los mensajes que explican por qué una sección está vacía se
+conservan.
+
+| Antes | Ahora |
+|---|---|
+| Pestaña `Panorama` · título «Panorama entre clientes» | Pestaña `Análisis` · el título se mantiene |
+| Pestaña `Preguntar` · título «Preguntar a la base instalada» | Pestaña `Consultas` · título «Hazle preguntas a la base de datos» |
+| Pestaña `Motor` · título «Motor y cumplimiento» | Pestaña `Sistema` · título «Sistema y cumplimiento» |
+| Título «Mapa de la base instalada» | Sin título; la pestaña ya lo nombra |
+
+En el mapa, los clientes con equipos en ventana de renovación pasan de ámbar a
+rojo. Sobre la cartografía clara el ámbar se confundía con los tonos del propio
+fondo.
+
+### Menú de las gráficas
+
+Salía en inglés («Save as SVG», «View Source»…). Lo dibuja Vega-Embed y no
+Streamlit, así que no se traduce con la configuración de la aplicación: las
+etiquetas viajan dentro del propio spec, en `usermeta.embedOptions.i18n`. Se
+añadió el envoltorio `grafica()` en `app.py`, por el que pasan todas las
+gráficas.
+
+---
+
 ## Comprobaciones
 
 | Prueba | Resultado |
