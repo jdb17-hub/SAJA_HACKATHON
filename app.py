@@ -18,7 +18,17 @@ from src.config import DIAS_SIN_VERIFICAR, EDAD_RENOVACION
 from src.confidence import alertas, desglose, dias_desde, es_oportunidad_renovacion, sin_verificar
 from src.extract import extraer
 from src.qvac_engine import obtener_motor
-from src.schema import ETIQUETA_ES, Borrador, Equipo, Estado, Modalidad, Observacion, es_desconocido
+from src.schema import (
+    DESCONOCIDO,
+    NO_IDENTIFICADO,
+    Borrador,
+    Equipo,
+    Estado,
+    Modalidad,
+    Observacion,
+    es_desconocido,
+    etiqueta,
+)
 
 st.set_page_config(page_title="Base Instalada QVAC", page_icon="🏥", layout="wide")
 
@@ -53,6 +63,35 @@ def estado_inicial() -> None:
     ss.setdefault("pregunta_actual", None)
     ss.setdefault("ultimo_guardado", None)
     ss.setdefault("revision", 0)
+
+
+# Columnas cuyo hueco significa "no se pudo determinar". Se traducen al pintar.
+# Las de texto libre (notas, nota original) quedan fuera a proposito: vacias
+# significan que no habia nada que anadir, no que falte un dato.
+COLUMNAS_TRADUCIBLES = {
+    "modality", "status", "confidence", "brand", "model",
+    "customer", "city", "country", "observer",
+    "Modalidad", "Estado", "Confianza", "Marca", "Modelo",
+    "Cliente", "Ciudad", "Pais", "Observador",
+}
+
+
+def para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
+    """Traduce enums y huecos antes de pintar una tabla.
+
+    Solo afecta a lo que se ve: el dataset y el CSV conservan los valores del
+    Excel del reto ("Unknown", "Confirmed", "MR"...), que es lo que espera quien
+    reciba el export.
+    """
+    if df.empty:
+        return df
+    copia = df.copy()
+    for columna in copia.columns:
+        if columna in COLUMNAS_TRADUCIBLES and copia[columna].dtype == object:
+            copia[columna] = copia[columna].map(
+                lambda v: etiqueta(v) if isinstance(v, str) else v
+            )
+    return copia
 
 
 def df_observaciones() -> pd.DataFrame:
@@ -234,6 +273,22 @@ def _revisar_borrador(motor) -> None:
     _panel_guardado(borrador, motor)
 
 
+def _campo(contenedor, titulo: str, valor: str, key: str) -> str:
+    """Campo de texto que enseña el hueco vacío en vez de la palabra "Unknown".
+
+    Un campo vacío con "No identificado" en gris se entiende y se rellena de un
+    tirón; uno que ya trae texto obliga a borrarlo primero. Hacia fuera sigue
+    devolviendo DESCONOCIDO, que es lo que se guarda.
+    """
+    escrito = contenedor.text_input(
+        titulo,
+        "" if es_desconocido(valor) else valor,
+        key=key,
+        placeholder=NO_IDENTIFICADO,
+    )
+    return escrito.strip() or DESCONOCIDO
+
+
 def _estado_cliente(nombre: str) -> None:
     """Dice de donde sale el cliente, para no tener que fiarse a ciegas.
 
@@ -261,9 +316,9 @@ def _editor_borrador(borrador: Borrador) -> None:
     rev = st.session_state.revision
 
     c1, c2, c3 = st.columns(3)
-    borrador.customer = c1.text_input("Cliente", borrador.customer, key=f"cli{rev}")
-    borrador.city = c2.text_input("Ciudad", borrador.city, key=f"ciu{rev}")
-    borrador.country = c3.text_input("Pais", borrador.country, key=f"pai{rev}")
+    borrador.customer = _campo(c1, "Cliente", borrador.customer, f"cli{rev}")
+    borrador.city = _campo(c2, "Ciudad", borrador.city, f"ciu{rev}")
+    borrador.country = _campo(c3, "Pais", borrador.country, f"pai{rev}")
     _estado_cliente(borrador.customer)
 
     for i, equipo in enumerate(borrador.items):
@@ -273,20 +328,20 @@ def _editor_borrador(borrador: Borrador) -> None:
             equipo.modality = Modalidad(
                 f1.selectbox(
                     "Modalidad", modalidades, modalidades.index(equipo.modality.value),
-                    key=f"m{rev}_{i}",
+                    format_func=etiqueta, key=f"m{rev}_{i}",
                 )
             )
             equipo.quantity = f2.number_input("Cantidad", 0, 200, equipo.quantity, key=f"q{rev}_{i}")
-            equipo.brand = f3.text_input("Marca", equipo.brand, key=f"b{rev}_{i}")
+            equipo.brand = _campo(f3, "Marca", equipo.brand, f"b{rev}_{i}")
 
             g1, g2, g3 = st.columns([2, 1, 2])
-            equipo.model = g1.text_input("Modelo", equipo.model, key=f"mo{rev}_{i}")
+            equipo.model = _campo(g1, "Modelo", equipo.model, f"mo{rev}_{i}")
             equipo.age_years = g2.number_input("Edad (anos)", 0, 40, equipo.age_years, key=f"e{rev}_{i}")
             estados = [e.value for e in Estado]
             equipo.status = Estado(
                 g3.selectbox(
                     "Estado", estados, estados.index(equipo.status.value),
-                    format_func=lambda v: ETIQUETA_ES.get(v, v), key=f"s{rev}_{i}",
+                    format_func=etiqueta, key=f"s{rev}_{i}",
                 )
             )
             if st.button("Quitar este grupo", key=f"del{rev}_{i}"):
@@ -364,13 +419,19 @@ def _panel_guardado(borrador: Borrador, motor) -> None:
             _reiniciar()
         return
 
-    st.info(followup.resumen(borrador))
-
     if es_desconocido(borrador.customer):
-        st.error("Falta el cliente: sin el, la observacion no se puede archivar.")
+        # Sin cliente no se puede archivar. Se dice una sola vez y en un sitio,
+        # con lo que si se entendio a la vista para que no parezca que se perdio.
+        st.warning(
+            "**Falta el cliente.** Responde a la pregunta del agente o escribe el "
+            "nombre arriba, y podras guardar."
+        )
+        st.caption(f"Lo demas quedo capturado: {followup.describir_equipos(borrador)}")
         if st.button("Descartar y empezar de nuevo"):
             _reiniciar()
         return
+
+    st.info(followup.resumen(borrador))
 
     existentes = store.por_cliente(borrador.customer)
     hay_duplicados = False
@@ -471,19 +532,18 @@ def pagina_cliente() -> None:
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 2, 2])
             c1.markdown(
-                f"**{ETIQUETA_ES.get(fila['modality'], fila['modality'])}** × {fila['quantity']}  \n"
-                f"{fila['brand']} · {fila['model']}"
+                f"**{etiqueta(fila['modality'])}** × {fila['quantity']}  \n"
+                f"{etiqueta(fila['brand'])} · {etiqueta(fila['model'])}"
             )
-            edad = f"{fila['age_years']} anos" if fila["age_years"] else "edad desconocida"
+            edad = f"{fila['age_years']} anos" if fila["age_years"] else "Edad no identificada"
             instal = f" (aprox. {fila['install_year']})" if fila["install_year"] else ""
             c2.markdown(
                 f"{edad}{instal}  \n"
-                f"{ETIQUETA_ES.get(fila['status'], fila['status'])} · "
-                f"observado por {fila['observer']}"
+                f"{etiqueta(fila['status'])} · observado por {fila['observer']}"
             )
             c3.markdown(
                 f"Confianza **{fila['confidence_score']}/100** "
-                f"({ETIQUETA_ES.get(fila['confidence'], fila['confidence'])})  \n"
+                f"({etiqueta(fila['confidence'])})  \n"
                 f"visto el {fila['visit_date']}"
             )
             if avisos:
@@ -580,7 +640,7 @@ def pagina_panorama() -> None:
             "quantity": "Unidades", "brand": "Marca", "age_years": "Edad",
             "confidence_score": "Confianza",
         })
-        st.dataframe(vista, width="stretch", hide_index=True)
+        st.dataframe(para_mostrar(vista), width="stretch", hide_index=True)
 
     st.markdown(f"#### Datos sin verificar en {DIAS_SIN_VERIFICAR}+ dias")
     viejas = df[df["sin_verificar"]]
@@ -593,11 +653,14 @@ def pagina_panorama() -> None:
             "customer": "Cliente", "modality": "Modalidad", "quantity": "Unidades",
             "observer": "Observador", "visit_date": "Ultima visita", "antiguedad_dias": "Dias",
         })
-        st.dataframe(vista, width="stretch", hide_index=True)
+        st.dataframe(para_mostrar(vista), width="stretch", hide_index=True)
 
     st.divider()
     st.markdown("#### Dataset completo")
-    st.dataframe(df.drop(columns=["oportunidad", "sin_verificar"]), width="stretch", hide_index=True)
+    st.dataframe(
+        para_mostrar(df.drop(columns=["oportunidad", "sin_verificar"])),
+        width="stretch", hide_index=True,
+    )
     ruta = Path(tempfile.gettempdir()) / "base_instalada.csv"
     store.exportar_csv(ruta)
     st.download_button("Descargar CSV", ruta.read_bytes(), "base_instalada.csv", "text/csv")
@@ -641,7 +704,7 @@ def pagina_preguntar(motor) -> None:
             "quantity": "Unidades", "brand": "Marca", "age_years": "Edad", "status": "Estado",
             "confidence_score": "Confianza", "visit_date": "Visita",
         })
-        st.dataframe(vista, width="stretch", hide_index=True)
+        st.dataframe(para_mostrar(vista), width="stretch", hide_index=True)
 
         if filtro.get("agrupar_por"):
             columna = {"cliente": "customer", "pais": "country", "modalidad": "modality", "marca": "brand"}[

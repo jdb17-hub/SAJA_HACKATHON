@@ -36,11 +36,16 @@ class Confianza(str, Enum):
     BAJA = "Low"
 
 
+# Lo que se enseña cuando un campo no se pudo determinar. Es solo presentación:
+# en la base y en el CSV el valor sigue siendo "Unknown", que es lo que usa el
+# dataset del reto y lo que espera quien reciba el export.
+NO_IDENTIFICADO = "No identificado"
+
 ETIQUETA_ES = {
     "Confirmed": "Confirmado",
     "Reported": "Reportado",
     "Estimated": "Estimado",
-    "Unknown": "Desconocido",
+    "Unknown": NO_IDENTIFICADO,
     "High": "Alta",
     "Medium": "Media",
     "Low": "Baja",
@@ -132,6 +137,18 @@ class Observacion(BaseModel):
 
 def es_desconocido(valor: str | None) -> bool:
     return not valor or valor.strip().lower() in {"unknown", "desconocido", "n/a", "-", ""}
+
+
+def etiqueta(valor: str | None) -> str:
+    """Cómo se enseña un valor en pantalla.
+
+    Traduce los enums y convierte los huecos en "No identificado": en una
+    interfaz en español, un "Unknown" suelto parece un fallo de la aplicación
+    y no lo que es, un dato que todavía no se conoce.
+    """
+    if es_desconocido(valor):
+        return NO_IDENTIFICADO
+    return ETIQUETA_ES.get(valor, valor)
 
 
 # Esquema JSON que se le impone al modelo con `response_format`. Al ser decodificación

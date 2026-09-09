@@ -42,16 +42,19 @@ class Pregunta:
         return self.campo if self.indice is None else f"items.{self.indice}.{self.campo}"
 
 
+PLURAL_MODALIDAD = {
+    Modalidad.MR: "resonadores",
+    Modalidad.CT: "tomografos",
+    Modalidad.ULTRASOUND: "ecografos",
+    Modalidad.XRAY: "equipos de rayos X",
+    Modalidad.MONITORING: "monitores de paciente",
+    Modalidad.IGT: "angiografos",
+    Modalidad.UNKNOWN: "equipos",
+}
+
+
 def _etiqueta_modalidad(m: Modalidad) -> str:
-    return {
-        Modalidad.MR: "los resonadores",
-        Modalidad.CT: "los tomografos",
-        Modalidad.ULTRASOUND: "los ecografos",
-        Modalidad.XRAY: "los equipos de rayos X",
-        Modalidad.MONITORING: "los monitores",
-        Modalidad.IGT: "los angiografos",
-        Modalidad.UNKNOWN: "los equipos",
-    }[m]
+    return f"los {PLURAL_MODALIDAD[m]}"
 
 
 def _candidatas(borrador: Borrador) -> list[Pregunta]:
@@ -265,13 +268,18 @@ def _primera_edad(texto: str) -> int:
 # --- resumen de confirmacion ------------------------------------------------
 
 
-def resumen(borrador: Borrador) -> str:
-    """Frase de cierre antes de guardar, como pide el paso 12 del Excel."""
+def describir_equipos(borrador: Borrador) -> str:
+    """Los equipos en lenguaje corriente, sin mencionar al cliente.
+
+    Se usa suelto cuando todavia no hay cliente: asi se puede ensenar lo que si
+    se entendio sin construir una frase con un hueco dentro.
+    """
     if not borrador.items:
         return "Todavia no hay ningun equipo registrado."
     partes = []
     for eq in borrador.items:
-        trozo = f"{eq.quantity or '?'} {eq.modality.value}"
+        cantidad = eq.quantity if eq.quantity else "?"
+        trozo = f"{cantidad} {PLURAL_MODALIDAD[eq.modality]}"
         if not es_desconocido(eq.brand):
             trozo += f" {eq.brand}"
         if not es_desconocido(eq.model):
@@ -279,7 +287,22 @@ def resumen(borrador: Borrador) -> str:
         if eq.age_years:
             trozo += f", aprox. {eq.age_years} anos"
         partes.append(trozo)
+    return "; ".join(partes)
+
+
+def resumen(borrador: Borrador) -> str:
+    """Frase de cierre antes de guardar, como pide el paso 12 del Excel.
+
+    Solo tiene sentido con un cliente identificado. Sin el saldria un "En
+    Unknown: ..." que ademas repite un problema ya senalado justo debajo, asi
+    que en ese caso se describe unicamente lo capturado.
+    """
+    if not borrador.items:
+        return "Todavia no hay ningun equipo registrado."
+    equipos = describir_equipos(borrador)
+    if es_desconocido(borrador.customer):
+        return f"Se entendio esto: {equipos}."
     lugar = borrador.customer
     if not es_desconocido(borrador.city):
         lugar += f" ({borrador.city})"
-    return f"En {lugar}: " + "; ".join(partes) + ". Es correcto?"
+    return f"En {lugar}: {equipos}. Es correcto?"
