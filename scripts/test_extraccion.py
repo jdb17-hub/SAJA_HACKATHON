@@ -56,6 +56,59 @@ CASOS: list[tuple[str, str, list[tuple[str, int]]]] = [
 ]
 
 
+# Notas donde el sitio no se identifica. Lo correcto es dejarlo vacio y
+# preguntar: inventar un cliente o una ciudad ensucia la base con filas que
+# nadie podra reconciliar despues, y eso es peor que un hueco.
+CASOS_SIN_LUGAR: list[tuple[str, str]] = [
+    ("Estoy en el hospital, tienen dos resonadores y un tomografo.", "tipo de centro, sin nombre"),
+    ("Estoy en la clinica de aqui al lado, vi tres ecografos.", "descripcion, no nombre"),
+    ("Tienen dos resonadores y un tomografo.", "no se menciona ningun sitio"),
+    ("Estoy en DemoCare, tienen dos resonadores.", "ambiguo: lo comparten 13 clientes"),
+    ("Vi dos tomografos en el centro medico.", "generico"),
+]
+
+# Clientes que no estan en el catalogo. Estos SI se guardan: el reto pide crear
+# un candidato nuevo cuando el nombre no se reconoce.
+CASOS_CLIENTE_NUEVO: list[tuple[str, str]] = [
+    ("Estoy en el Hospital Santo Tomas en Panama, tienen dos resonadores.", "Hospital Santo Tomas"),
+    ("En la Clinica San Fernando vi tres ecografos.", "Clinica San Fernando"),
+]
+
+
+def evaluar_sin_lugar(extractor) -> tuple[int, int]:
+    """Que no se invente ni cliente, ni ciudad, ni pais."""
+    print()
+    print("=" * 78)
+    print("SITIO NO IDENTIFICABLE (no debe inventar nada)")
+    print("=" * 78)
+    aciertos = 0
+    for nota, motivo in CASOS_SIN_LUGAR:
+        b = extractor(nota)
+        limpio = b.customer == "Unknown" and b.city == "Unknown" and b.country == "Unknown"
+        aciertos += limpio
+        print(f"[{'OK ' if limpio else 'FAIL'}] {nota[:56]}...  ({motivo})")
+        if not limpio:
+            print(f"        invento: cliente={b.customer!r} ciudad={b.city!r} pais={b.country!r}")
+    return aciertos, len(CASOS_SIN_LUGAR)
+
+
+def evaluar_cliente_nuevo(extractor) -> tuple[int, int]:
+    """Un cliente que no esta en el catalogo se registra igual, no se descarta."""
+    print()
+    print("=" * 78)
+    print("CLIENTE NUEVO (debe guardarse)")
+    print("=" * 78)
+    aciertos = 0
+    for nota, esperado in CASOS_CLIENTE_NUEVO:
+        b = extractor(nota)
+        ok = b.customer == esperado
+        aciertos += ok
+        print(f"[{'OK ' if ok else 'FAIL'}] {nota[:56]}...")
+        if not ok:
+            print(f"        cliente: {b.customer!r} != {esperado!r}")
+    return aciertos, len(CASOS_CLIENTE_NUEVO)
+
+
 def totales(borrador) -> dict[str, int]:
     """Unidades por modalidad, sumando los grupos que el agente haya partido."""
     suma: dict[str, int] = {}
@@ -105,12 +158,19 @@ def main() -> None:
         sys.exit(1)
     print(f"Modelo {estado.llm_model} cargado en {estado.segundos_carga:.1f}s")
 
-    c_hib, e_hib, t_hib = evaluar("HIBRIDO (reglas + QVAC en el dispositivo)", lambda t: extraer(t, motor))
+    def hibrido(nota: str):
+        return extraer(nota, motor)
+
+    c_hib, e_hib, t_hib = evaluar("HIBRIDO (reglas + QVAC en el dispositivo)", hibrido)
+    sl_ok, sl_total = evaluar_sin_lugar(hibrido)
+    cn_ok, cn_total = evaluar_cliente_nuevo(hibrido)
 
     print(f"\n{'=' * 78}\nRESUMEN ({total} casos)\n{'=' * 78}")
     print(f"{'':<28}{'cliente':>10}{'equipos':>10}{'tiempo':>12}")
     print(f"{'solo reglas':<28}{c_reglas:>7}/{total}{e_reglas:>7}/{total}{t_reglas:>10.1f}s")
     print(f"{'hibrido (QVAC)':<28}{c_hib:>7}/{total}{e_hib:>7}/{total}{t_hib:>10.1f}s")
+    print(f"{'no inventa sitio':<28}{sl_ok:>7}/{sl_total}")
+    print(f"{'guarda cliente nuevo':<28}{cn_ok:>7}/{cn_total}")
     print(f"\nLatencia media por nota: {t_hib / total:.2f}s · {motor.estado.inferencias} inferencias")
     motor.cerrar()
 

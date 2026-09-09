@@ -121,8 +121,26 @@ Y sobre la fusión, el guardarraíl que hace usable un modelo pequeño:
 > se descarta y se pregunta. Un campo vacío es recuperable; una marca inventada
 > contamina la base y nadie se entera.
 
-Lo mismo con las edades: solo se acepta un número de años que se haya
-mencionado de verdad.
+Lo mismo con las edades, la ciudad y el país: solo se aceptan si se dijeron. Una
+nota que solo decía *"estoy en el hospital"* volvía con ciudad Santander y país
+Spain, inventados enteros por el modelo para no dejar el hueco vacío.
+
+**El cliente lleva dos comprobaciones más**, porque es el campo que decide dónde
+se archiva todo lo demás:
+
+- **Tiene que ser un nombre.** *"el hospital"*, *"la clínica de aquí al lado"* o
+  *"el centro médico"* describen un sitio pero no nombran a nadie. Si al quitar
+  el tipo de centro y el relleno no queda ninguna palabra propia, se deja vacío
+  y el agente pregunta.
+- **El emparejado va por palabras distintivas, no por parecido de cadenas.** Con
+  parecido, `"Hospital"` a secas se enganchaba al primer hospital de la lista, y
+  `"DemoCare"` —que comparten los trece clientes— también. Ahora hace falta que
+  un cliente gane con claridad; si varios empatan, se pregunta cuál en vez de
+  adivinar.
+
+Un cliente que **sí** se entiende pero no está en el catálogo se registra como
+candidato nuevo, y la interfaz lo marca como tal para que se revise el nombre
+antes de guardar.
 
 Las cantidades se concilian entre ambos. Si el texto menciona una modalidad una
 sola vez, las reglas mandan. Si la menciona varias veces es ambiguo —
@@ -225,7 +243,15 @@ Resultado medido en un portátil Windows sin GPU:
 | | Cliente correcto | Equipos correctos | Tiempo |
 |---|---|---|---|
 | Solo reglas | 16/16 | 14/16 | 0,1 s |
-| **Híbrido (QVAC)** | **16/16** | **16/16** | 23 s |
+| **Híbrido (QVAC)** | **16/16** | **16/16** | 26 s |
+
+Más dos baterías que cubren el sentido contrario, que es donde más daño hace
+equivocarse:
+
+| | Resultado |
+|---|---|
+| No inventa sitio cuando no se entiende | 5/5 |
+| Guarda el cliente nuevo en vez de descartarlo | 2/2 |
 
 **1,45 s por nota**, con el modelo cargado desde disco en 20 s. Los dos casos
 que las reglas solas no resuelven son los que necesitan interpretar la frase:

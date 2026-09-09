@@ -234,6 +234,25 @@ def _revisar_borrador(motor) -> None:
     _panel_guardado(borrador, motor)
 
 
+def _estado_cliente(nombre: str) -> None:
+    """Dice de donde sale el cliente, para no tener que fiarse a ciegas.
+
+    Importa la diferencia: uno del catalogo hereda ciudad y pais conocidos y
+    entra en la deteccion de duplicados; uno nuevo abre ficha y conviene
+    revisar como esta escrito antes de guardarlo.
+    """
+    from src.normalize import normalizar_cliente
+
+    if es_desconocido(nombre):
+        st.caption("⚠️ Sin cliente. No se entendio el nombre, asi que no se ha rellenado nada.")
+        return
+    _, ficha = normalizar_cliente(nombre)
+    if ficha:
+        st.caption(f"✓ Cliente conocido — {ficha.get('city')}, {ficha.get('country')}")
+    else:
+        st.caption("🆕 Cliente nuevo: no estaba en la base. Revisa el nombre antes de guardar.")
+
+
 def _editor_borrador(borrador: Borrador) -> None:
     # Streamlit conserva el valor de un widget mientras su `key` no cambie, y ese
     # valor guardado gana al argumento por defecto. Sin versionar las claves, el
@@ -245,6 +264,7 @@ def _editor_borrador(borrador: Borrador) -> None:
     borrador.customer = c1.text_input("Cliente", borrador.customer, key=f"cli{rev}")
     borrador.city = c2.text_input("Ciudad", borrador.city, key=f"ciu{rev}")
     borrador.country = c3.text_input("Pais", borrador.country, key=f"pai{rev}")
+    _estado_cliente(borrador.customer)
 
     for i, equipo in enumerate(borrador.items):
         with st.container(border=True):
