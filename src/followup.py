@@ -37,9 +37,11 @@ class Pregunta:
     indice: int | None = None  # posicion del equipo al que se refiere
     valor: float = 0.0
 
+    group_id: str | None = None
+
     @property
     def clave(self) -> str:
-        return self.campo if self.indice is None else f"items.{self.indice}.{self.campo}"
+        return self.campo if self.indice is None else f"items.{self.group_id or self.indice}.{self.campo}"
 
 
 PLURAL_MODALIDAD = {
@@ -74,17 +76,19 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
         etiqueta = _etiqueta_modalidad(eq.modality)
         # Un grupo grande multiplica el valor de conocer su marca o su edad:
         # la marca de cinco ecografos vale mas que la de uno.
-        escala = 1.0 + math.log1p(max(eq.quantity, 1)) / 2
+        escala = 1.0 + math.log1p(max(eq.quantity or 0, 1)) / 2
 
         if eq.modality == Modalidad.UNKNOWN:
             pendientes.append(Pregunta("modality", "¿Qué tipo de equipo era exactamente?", i, PESO_CAMPO["modality"]))
-        if eq.quantity <= 0:
+        if eq.quantity is None:
             pendientes.append(Pregunta("quantity", f"¿Cuántos {PLURAL_MODALIDAD[eq.modality]} viste?", i, PESO_CAMPO["quantity"]))
+        if eq.quantity == 0:
+            continue
         if es_desconocido(eq.brand):
             pendientes.append(
                 Pregunta("brand", f"¿Sabes de qué marca son {etiqueta}?", i, PESO_CAMPO["brand"] * escala)
             )
-        if eq.age_years <= 0:
+        if eq.age_years is None:
             pendientes.append(
                 Pregunta("age_years", f"¿Qué antigüedad aproximada tienen {etiqueta}?", i, PESO_CAMPO["age_years"] * escala)
             )
@@ -92,6 +96,10 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
             # El modelo solo se pregunta si ya sabemos la marca; si no, sobra.
             pendientes.append(Pregunta("model", f"¿Recuerdas el modelo de {etiqueta}?", i, PESO_CAMPO["model"]))
 
+    for p in pendientes:
+        if p.indice is not None:
+            p.group_id = borrador.items[p.indice].group_id
+            p.texto = f"Grupo {p.indice + 1}: {p.texto}"
     return sorted(pendientes, key=lambda p: -p.valor)
 
 
@@ -159,14 +167,14 @@ def aplicar_respuesta(
     # 1. Reglas: resuelven la mayoria de respuestas cortas sin gastar inferencia.
     if campo == "quantity" and equipo is not None:
         valor = _primer_numero(respuesta)
-        if valor:
+        if 0 <= valor <= 200 and any(N.a_numero(t) is not None for t in N.clave(respuesta).split()):
             equipo.quantity = valor
             equipo.status = N.detectar_estado(respuesta)
             return borrador, True
 
     if campo == "age_years" and equipo is not None:
         valor = _primera_edad(respuesta)
-        if valor:
+        if valor is not None:
             equipo.age_years = valor
             equipo.status = N.detectar_estado(respuesta)
             return borrador, True
@@ -190,7 +198,7 @@ def aplicar_respuesta(
                 equipo.modality = modalidad
             else:
                 borrador.items.append(
-                    Equipo(modality=modalidad, quantity=_primer_numero(respuesta) or 0,
+                    Equipo(modality=modalidad, quantity=_primer_numero(respuesta) or None,
                            status=N.detectar_estado(respuesta))
                 )
             return borrador, True
@@ -210,6 +218,7 @@ def aplicar_respuesta(
         if not es_desconocido(nombre):
             borrador.customer = nombre
             if ficha:
+                borrador.location_source = "catálogo"
                 if es_desconocido(borrador.city):
                     borrador.city = ficha.get("city", DESCONOCIDO)
                 if es_desconocido(borrador.country):
@@ -227,7 +236,7 @@ def aplicar_respuesta(
                 nombre="respuesta",
                 max_tokens=120,
             )
-            if salida.get("sabe") and salida.get("valor"):
+            if salida.get("sabe") and salida.get("valor") and N.clave(str(salida["valor"])) in N.clave(respuesta):
                 limpia = Pregunta(campo, pregunta.texto, i, 0)
                 return aplicar_respuesta(borrador, limpia, str(salida["valor"]), motor=None)
         except Exception:  # noqa: BLE001
@@ -246,23 +255,14 @@ def _primer_numero(texto: str) -> int:
     return 0
 
 
-def _primera_edad(texto: str) -> int:
-    """Acepta '7', 'siete anos', '5-7 anos' (toma el punto medio) o un ano de instalacion."""
+def _primera_edad(texto: str) -> int | None:
+    """Los rangos se conservan como nota; no se inventa un punto medio."""
     t = N.clave(texto)
-    rango = re.search(r"(\d+)\s*(?:-|a|y)\s*(\d+)", t)
-    if rango:
-        a, b = int(rango.group(1)), int(rango.group(2))
-        if 0 < a <= 40 and 0 < b <= 40:
-            return round((a + b) / 2)
-    from datetime import date
-
-    anio = re.search(r"\b(19[89]\d|20[0-4]\d)\b", t)
-    if anio:
-        edad = date.today().year - int(anio.group(1))
-        if 0 < edad <= 40:
-            return edad
-    valor = _primer_numero(texto)
-    return valor if 0 < valor <= 40 else 0
+    valores = [N.a_numero(token) for token in t.split() if N.a_numero(token) is not None]
+    if len(valores) != 1:
+        return None
+    valor = valores[0]
+    return valor if 0 <= valor <= 40 else None
 
 
 # --- resumen de confirmacion ------------------------------------------------
@@ -278,13 +278,13 @@ def describir_equipos(borrador: Borrador) -> str:
         return "Todavía no hay ningún equipo registrado."
     partes = []
     for eq in borrador.items:
-        cantidad = eq.quantity if eq.quantity else "?"
+        cantidad = eq.quantity if eq.quantity is not None else "?"
         trozo = f"{cantidad} {PLURAL_MODALIDAD[eq.modality]}"
         if not es_desconocido(eq.brand):
             trozo += f" {eq.brand}"
         if not es_desconocido(eq.model):
             trozo += f" {eq.model}"
-        if eq.age_years:
+        if eq.age_years is not None:
             trozo += f", aprox. {eq.age_years} años"
         partes.append(trozo)
     return "; ".join(partes)
