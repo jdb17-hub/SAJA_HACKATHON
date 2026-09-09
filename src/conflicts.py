@@ -90,7 +90,13 @@ def abiertos(filas: list[dict]) -> list[dict]:
 
 
 def _versiones_en_desacuerdo(fila: dict) -> list[tuple[dict, list[str]]]:
-    """Las visitas que reportaron algo distinto de lo que hoy está vigente."""
+    """Las visitas que reportaron algo distinto de lo que hoy está vigente.
+
+    Los datos salen de las revisiones de tipo `extracción`, que guardan el
+    borrador entero de cada visita. Las de tipo `consolidar` solo dejan
+    constancia de la acción —el modo y los destinos— y no sirven para saber qué
+    dijo cada quien.
+    """
     equipment_id = fila.get("observation_id")
     if equipment_id is None:
         return []
@@ -102,12 +108,23 @@ def _versiones_en_desacuerdo(fila: dict) -> list[tuple[dict, list[str]]]:
     versiones = []
     for revision in revisiones:
         payload = revision.get("payload") or {}
-        propuesta = payload.get("observacion") or payload.get("obs") or payload
-        if not isinstance(propuesta, dict):
+        borrador = payload.get("borrador")
+        if not isinstance(borrador, dict):
             continue
-        motivos = _diferencias(fila, propuesta)
-        if motivos:
-            versiones.append(({**propuesta, "_original": revision.get("original", "")}, motivos))
+        for item in borrador.get("items", []):
+            if not isinstance(item, dict) or item.get("modality") != fila.get("modality"):
+                continue
+            propuesta = {
+                **item,
+                "customer": borrador.get("customer", ""),
+                "observer": payload.get("observer", ""),
+                "visit_date": payload.get("visit_date", ""),
+                "_original": revision.get("original", ""),
+                "_visit_id": revision.get("visit_id"),
+            }
+            motivos = _diferencias(fila, propuesta)
+            if motivos:
+                versiones.append((propuesta, motivos))
     return versiones
 
 

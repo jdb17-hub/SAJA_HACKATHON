@@ -50,9 +50,8 @@ class StreamlitTests(unittest.TestCase):
     def test_evidence_ui_does_not_add_units(self):
         eid=store.guardar(Observacion(customer='Hospital Nuevo Real',city='Panama City',country='Panama',modality='CT',quantity=2,observer='Ana'))
         a=self.app();self.draft(a,2)
-        dest=next(s for s in a.selectbox if s.label=='Destino del grupo 1')
-        dest.set_value(store.todas()[0]).run(timeout=20)
-        self.assertFalse(a.exception)
+        # Ya no se elige destino a mano: el grupo vigente de esa modalidad se
+        # empareja solo, asi que guardar es un unico clic.
         self.button(a,'Confirmar y guardar').click().run(timeout=20)
         self.assertFalse(a.exception)
         self.assertEqual([(r['observation_id'],r['quantity']) for r in store.todas()],[(eid,2)])

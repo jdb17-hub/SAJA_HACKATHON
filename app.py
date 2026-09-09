@@ -14,8 +14,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src import conflicts, followup, geo, insights, nlquery, store
-from src import normalize as N
+from src import conflicts, documents, followup, geo, insights, nlquery, store
 from src.config import DIAS_SIN_VERIFICAR, EDAD_RENOVACION
 from src.confidence import alertas, desglose, dias_desde, es_oportunidad_renovacion, sin_verificar
 from src.extract import extraer
@@ -187,7 +186,7 @@ def pagina_capturar(motor) -> None:
 
 
 def _entrada_nueva(motor) -> None:
-    pestana_texto, pestana_voz = st.tabs(["Escribir", "Dictar"])
+    pestana_texto, pestana_voz, pestana_doc = st.tabs(["Escribir", "Dictar", "Subir documento"])
 
     with pestana_texto:
         st.session_state.visit_date = st.date_input("Fecha de la visita", value=st.session_state.visit_date, max_value=date.today())
@@ -219,6 +218,110 @@ def _entrada_nueva(motor) -> None:
         audio = st.audio_input("Graba tu nota de voz al salir de la visita", disabled=not motor.estado.listo)
         if audio is not None and st.button("Transcribir y extraer", type="primary"):
             _procesar_audio(audio, motor)
+
+    with pestana_doc:
+        _entrada_documento(motor)
+
+
+def _entrada_documento(motor) -> None:
+    """Sube un informe, un acta o un inventario y sale el mismo borrador.
+
+    Leer el fichero es parsing, no inferencia: se abre y se saca el texto que ya
+    trae dentro. A partir de ahi sigue exactamente el mismo camino que una nota
+    escrita a mano, asi que no hay una segunda forma de equivocarse.
+    """
+    st.caption(
+        "Informe de visita, acta o inventario. Formatos: PDF, Word (.docx), "
+        "Excel, CSV y texto. No se lee texto de imagenes ni de PDF escaneados."
+    )
+    st.session_state.visit_date = st.date_input(
+        "Fecha de la visita", value=st.session_state.visit_date,
+        max_value=date.today(), key="fecha_doc",
+    )
+
+    subido = st.file_uploader(
+        "Documento de la visita",
+        type=[e.lstrip(".") for e in sorted(documents.EXTENSIONES)],
+        key=f"doc{st.session_state.revision}",
+    )
+    if subido is None:
+        return
+
+    try:
+        doc = documents.leer(subido.name, subido.getvalue())
+    except documents.DocumentoNoSoportado as exc:
+        st.error(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"No se pudo leer el documento: {type(exc).__name__}: {exc}")
+        return
+
+    detalle = f"{doc.palabras} palabras"
+    if doc.paginas:
+        detalle += f" · {doc.paginas} paginas"
+    trozos = len(documents.trocear(doc.texto))
+    if trozos > 1:
+        detalle += f" · se leera en {trozos} partes"
+    st.success(f"**{doc.nombre}** — {detalle}")
+    for aviso in doc.avisos:
+        st.warning(aviso)
+
+    detectados = documents.clientes_mencionados(doc.texto)
+    cliente = None
+    if len(detectados) > 1:
+        # Repartir los equipos de un hospital en la ficha de otro es el peor
+        # fallo posible aqui, y no se nota hasta que alguien pregunta.
+        st.warning(
+            f"El documento menciona {len(detectados)} clientes. Elige de cual "
+            "capturas ahora; los demas se registran subiendolo otra vez."
+        )
+        cliente = st.selectbox("Cliente que vas a capturar", detectados, key="cliente_doc")
+
+    with st.expander("Texto extraido del documento", expanded=trozos == 1):
+        st.caption("Puedes corregirlo o recortarlo antes de extraer.")
+        texto = st.text_area(
+            "Texto", doc.texto, height=260, label_visibility="collapsed",
+            key=f"txtdoc{st.session_state.revision}",
+        )
+
+    if st.button("Extraer datos del documento", type="primary", disabled=not motor.estado.listo):
+        if texto.strip():
+            _procesar_documento(texto, doc.nombre, cliente, motor)
+
+
+def _procesar_documento(texto: str, nombre: str, cliente: str | None, motor) -> None:
+    if not motor.estado.listo:
+        st.info("La captura aun no esta lista. El documento sigue cargado mientras arranca.")
+        return
+    if st.session_state.inicio_captura is None:
+        st.session_state.inicio_captura = time.time()
+
+    with st.spinner("Leyendo el documento en el dispositivo..."):
+        try:
+            lectura = documents.analizar(
+                texto, motor, fecha=st.session_state.visit_date, cliente=cliente
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"No se pudo interpretar con QVAC: {exc}. El documento sigue cargado.")
+            return
+
+    borrador = lectura.borrador
+    if not borrador.items and es_desconocido(borrador.customer):
+        st.warning(
+            "No se reconocio ningun equipo en el documento. Revisa el texto extraido: "
+            "puede que la informacion este en una tabla que no se leyo bien."
+        )
+        return
+
+    st.session_state.borrador = borrador
+    st.session_state.texto_original = texto
+    st.session_state.fuente = "Document"
+    st.session_state.omitidas = set()
+    st.session_state.conversacion = [("colaborador", f"[Documento: {nombre}]")]
+    st.session_state.pregunta_actual = followup.siguiente_pregunta(borrador, set())
+    _persistir_borrador()
+    st.session_state.revision += 1
+    st.rerun()
 
 
 def _procesar_audio(audio, motor) -> None:
@@ -290,21 +393,36 @@ def _procesar(texto: str, fuente: str, motor) -> None:
 def _revisar_borrador(motor) -> None:
     borrador: Borrador = st.session_state.borrador
 
-    es_voz = st.session_state.fuente == "Voice"
-    st.markdown("#### Transcripción" if es_voz else "#### Nota original")
+    fuente = st.session_state.fuente
+    es_voz = fuente == "Voice"
+    es_doc = fuente == "Document"
 
-    if es_voz:
-        # Whisper se equivoca con nombres propios, y una palabra mal oida
-        # arrastra toda la extraccion. Poder corregirla y reprocesar evita
-        # tener que repetir la grabacion entera.
-        st.caption("Si el dictado se entendió mal, corrígelo aquí y vuelve a extraer.")
+    st.markdown(
+        "#### Transcripción" if es_voz
+        else "#### Texto del documento" if es_doc
+        else "#### Nota original"
+    )
+
+    if es_voz or es_doc:
+        # Una palabra mal leida arrastra toda la extraccion, tanto si viene de
+        # Whisper como de un PDF mal maquetado. Poder corregirla y reprocesar
+        # evita repetir la grabacion o volver a subir el fichero.
+        st.caption(
+            "Si el dictado se entendió mal, corrígelo aquí y vuelve a extraer."
+            if es_voz else
+            "Si el documento se leyó mal, corrígelo o recórtalo aquí y vuelve a extraer."
+        )
         corregida = st.text_area(
-            "Transcripción", st.session_state.texto_original, height=90,
+            "Texto de origen", st.session_state.texto_original,
+            height=90 if es_voz else 200,
             label_visibility="collapsed", key=f"trans{st.session_state.revision}",
         )
         if corregida.strip() and corregida != st.session_state.texto_original:
             if st.button("Volver a extraer con el texto corregido", type="primary"):
-                _procesar(corregida, "Voice", motor)
+                if es_doc:
+                    _procesar_documento(corregida, "texto corregido", borrador.customer, motor)
+                else:
+                    _procesar(corregida, "Voice", motor)
     else:
         st.info(st.session_state.texto_original)
 
@@ -368,15 +486,6 @@ def _editor_borrador(borrador: Borrador) -> None:
     borrador.city = _campo(c2, "Ciudad", borrador.city, f"ciu{rev}")
     borrador.country = _campo(c3, "País", borrador.country, f"pai{rev}")
     _estado_cliente(borrador.customer)
-    conocidos = {store.identidad(f): f for f in store.todas()}
-    fichas = list(conocidos.values()) + N.catalogo_clientes()
-    opcion = st.selectbox("Seleccionar cliente conocido (opcional)", [None, *fichas],
-        format_func=lambda f: "Selecciona para resolver el nombre o la ubicación" if f is None else f"{f['customer']} · {f['city']} · {f['country']}")
-    if opcion and st.button("Usar este cliente"):
-        borrador.customer, borrador.city, borrador.country = opcion['customer'], opcion['city'], opcion['country']
-        borrador.location_source = "catálogo seleccionado"
-        _tocar_borrador()
-    st.caption(f"Ubicación inicial: {borrador.location_source}. Puedes corregirla; los cambios quedan en el historial.")
     st.session_state.visit_date = st.date_input("Fecha real de visita", value=st.session_state.visit_date,
         max_value=date.today(), key=f"fecha{rev}")
     st.caption("Deja la fecha vacía si no la conoces. Una cantidad o edad vacía significa desconocida; cero es un valor explícito.")
@@ -489,7 +598,6 @@ def _panel_guardado(borrador: Borrador, motor) -> None:
     except ValueError as exc:
         st.error(str(exc))
         return
-    st.caption(f"Borrador #{st.session_state.visit_id} guardado. Extracción: {borrador.inference}.")
     if st.button("Descartar borrador"):
         store.descartar(st.session_state.visit_id)
         _reiniciar()
@@ -498,36 +606,21 @@ def _panel_guardado(borrador: Borrador, motor) -> None:
         return
     st.info(followup.resumen(borrador))
     st.caption("Cada grupo debe representar unidades distintas. No incluyas el total y sus subconjuntos como grupos separados.")
+    # Antes habia que elegir a mano entre cuatro acciones sobre el inventario y,
+    # para dos de ellas, el grupo de destino de cada modalidad. Se decide solo:
+    # lo que ya existe entra como evidencia sobre su grupo y lo que no, se crea.
+    # Asi guardar es un clic, y las discrepancias salen en Conflictos en vez de
+    # frenar al colaborador justo al terminar la visita.
     existentes = [f for f in store.todas() if store.identidad(f) == store.identidad(borrador.model_dump())]
     if existentes:
+        st.caption("Este cliente ya está en la base. Lo que coincida se añade como evidencia del grupo existente.")
         st.dataframe(para_mostrar(pd.DataFrame(existentes)[['observation_id','modality','quantity','brand','age_years','visit_date']]),hide_index=True)
-    acciones = {'evidencia':'Vincular evidencia (visita parcial, no cambia cantidades)',
-                'recuento':'Recuento actual (reemplaza las modalidades descritas)',
-                'completar':'Completar campos desconocidos de grupos existentes',
-                'nuevo':'Registrar una flota distinta'}
-    modo = st.selectbox("Acción sobre el inventario", list(acciones) if existentes else ['nuevo','recuento'],
-                        format_func=acciones.get)
-    destinos = {}
-    valido = True
-    if modo in {'evidencia','completar'}:
-        for i, eq in enumerate(borrador.items):
-            opciones = [f for f in existentes if f['modality'] == eq.modality.value]
-            dest = st.selectbox(f"Destino del grupo {i+1}", [None, *opciones], key=f"dest{eq.group_id}",
-                format_func=lambda f: 'Selecciona un grupo' if f is None else f"#{f['observation_id']} · {f['modality']} × {f['quantity']} · {f['brand']}")
-            if dest:
-                destinos[eq.group_id] = dest['observation_id']
-                if not store.compatible(eq.model_dump(),dest):
-                    st.warning("Hay diferencias. Como evidencia se conservarán sin aumentar confianza ni cambiar el inventario.")
-            else:
-                valido = False
-    if modo == 'recuento':
-        valido = st.checkbox("Verifiqué el total de cada modalidad descrita; los grupos no se solapan.")
-    elif modo == 'nuevo' and existentes:
-        valido = st.checkbox("Son equipos distintos de los ya registrados, no otra visita a los mismos equipos.")
-    if st.button("Confirmar y guardar", type="primary", disabled=not valido):
+        _avisar_discrepancias(borrador, existentes)
+
+    if st.button("Confirmar y guardar", type="primary"):
         try:
             _persistir_borrador()
-            ids = store.consolidar(st.session_state.visit_id, st.session_state.visit_version, modo, destinos)
+            ids = store.consolidar(st.session_state.visit_id, st.session_state.visit_version, "auto")
         except ValueError as exc:
             st.error(str(exc))
         else:
@@ -535,6 +628,32 @@ def _panel_guardado(borrador: Borrador, motor) -> None:
             if st.session_state.inicio_captura:
                 st.session_state.segundos_captura = time.time() - st.session_state.inicio_captura
             _reiniciar()
+
+
+def _avisar_discrepancias(borrador: Borrador, existentes: list[dict]) -> None:
+    """Adelanta qué grupos no cuadran con lo que ya había.
+
+    Se dice antes de guardar, no después: si el colaborador se equivocó al
+    dictar, corregirlo ahora cuesta un segundo; descubrirlo mañana en la lista
+    de conflictos cuesta una llamada al hospital.
+    """
+    choques = []
+    for equipo in borrador.items:
+        for fila in existentes:
+            if fila["modality"] != equipo.modality.value:
+                continue
+            if not store.compatible(equipo.model_dump(), fila):
+                choques.append(
+                    f"{etiqueta(equipo.modality.value)}: dices {equipo.quantity or '?'} "
+                    f"y en la base hay {fila['quantity']}"
+                )
+            break
+    if choques:
+        st.warning(
+            "Esto no cuadra con lo registrado: " + " · ".join(choques)
+            + ". Se guardará como evidencia y quedará en **Conflictos** para revisarlo; "
+            "el inventario no cambia hasta que alguien decida."
+        )
 
 
 def _reiniciar() -> None:
@@ -763,7 +882,7 @@ def _dibujar_mapa(sedes: list[dict]) -> None:
             },
         )
     )
-    st.caption("🟠 con equipos en ventana de renovación · 🔵 flota reciente")
+    st.caption("Ámbar: con equipos en ventana de renovación. Azul: flota reciente.")
 
 
 # --- pagina: conflictos -----------------------------------------------------

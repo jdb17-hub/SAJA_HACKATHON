@@ -155,8 +155,37 @@ def confirma(nueva, actual):
     return True
 
 
+def _destinos_automaticos(filas, existentes):
+    """Empareja cada grupo capturado con el grupo vigente de su modalidad.
+
+    Es lo que permite guardar sin preguntar nada: si el hospital ya tenia
+    registrada esa modalidad, la visita entra como evidencia sobre ese grupo, y
+    si lo dicho no cuadra queda anotado como conflicto. Lo que nunca hace es
+    crear un grupo paralelo en silencio, porque entonces la base diria que hay
+    el doble de equipos y nadie lo notaria.
+
+    Cuando ninguno de los candidatos cuadra se elige el mas reciente a
+    proposito: la discrepancia tiene que quedar registrada contra el dato que
+    hoy se da por bueno.
+    """
+    destinos, usados = {}, set()
+    for gid, nueva in filas:
+        candidatos = [e for e in existentes
+                      if e['modality'] == nueva['modality'] and e['id'] not in usados]
+        if not candidatos:
+            continue
+        def frescura(e):
+            datos = json.loads(e['payload'])
+            return max(datos.get('verified_date', ''), datos.get('visit_date', ''))
+        cuadran = [e for e in candidatos if compatible(nueva, json.loads(e['payload']))]
+        elegido = sorted(cuadran or candidatos, key=frescura, reverse=True)[0]
+        destinos[gid] = elegido['id']
+        usados.add(elegido['id'])
+    return destinos
+
+
 def consolidar(vid, version, modo, destinos=None):
-    if modo not in {'nuevo','recuento','evidencia','completar'}:
+    if modo not in {'auto','nuevo','recuento','evidencia','completar'}:
         raise ValueError('Acción inválida.')
     destinos=destinos or {}
     with closing(conectar()) as con, con:
@@ -184,6 +213,8 @@ def consolidar(vid, version, modo, destinos=None):
             filas.append((eq.group_id,obs.model_dump()))
         identity=identidad(filas[0][1])
         existentes=[dict(r) for r in con.execute('SELECT * FROM ib_equipment WHERE identity=? AND active=1',(identity,))]
+        if modo=='auto':
+            destinos=_destinos_automaticos(filas,existentes)
         if modo=='recuento':
             if not fecha or any(r['quantity'] is None for _,r in filas):
                 raise ValueError('Un recuento requiere fecha de visita y cantidades conocidas.')
@@ -197,7 +228,11 @@ def consolidar(vid, version, modo, destinos=None):
         ids=[]
         usados=set()
         for gid,nueva in filas:
-            if modo in {'nuevo','recuento'}:
+            # En automatico cada grupo decide por su cuenta: el que ya existe se
+            # vincula, el que no, se crea. Un mismo modo para toda la visita no
+            # sirve cuando trae una modalidad conocida y otra nueva.
+            accion = ('evidencia' if gid in destinos else 'nuevo') if modo=='auto' else modo
+            if accion in {'nuevo','recuento'}:
                 eid=con.execute('INSERT INTO ib_equipment(identity,modality,payload,visit_id) VALUES(?,?,?,?)',
                     (identity,nueva['modality'],pack(nueva),vid)).lastrowid
                 con.execute('INSERT INTO ib_evidence VALUES(?,?,1,1)',(eid,vid))
@@ -212,7 +247,7 @@ def consolidar(vid, version, modo, destinos=None):
                 actual=json.loads(destino['payload'])
                 coincide=compatible(nueva,actual)
                 confirma_todo=confirma(nueva,actual)
-                if modo=='completar':
+                if accion=='completar':
                     if not coincide or (actual['quantity'] is not None and actual['quantity']!=nueva['quantity']):
                         raise ValueError('Completar requiere cantidades compatibles; un detalle parcial no describe toda la flota.')
                     anterior=dict(actual)
