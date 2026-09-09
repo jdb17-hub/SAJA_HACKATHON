@@ -1,0 +1,98 @@
+[
+ {
+  "Step": "1",
+  "Information to Capture": "Customer / Hospital",
+  "Required?": "Yes",
+  "Example Agent Question": "Which customer or hospital are you visiting?",
+  "Example User Answer": "Hospital DemoCare Pacific",
+  "Validation / Logic": "Match against customer list if available; otherwise create a new candidate record."
+ },
+ {
+  "Step": "2",
+  "Information to Capture": "Country / City",
+  "Required?": "Yes",
+  "Example Agent Question": "Which city and country is the customer in?",
+  "Example User Answer": "Panama City, Panama",
+  "Validation / Logic": "Use location to disambiguate customers with similar names."
+ },
+ {
+  "Step": "3",
+  "Information to Capture": "Modality / Equipment Type",
+  "Required?": "Yes",
+  "Example Agent Question": "What type of equipment did you observe?",
+  "Example User Answer": "MR and CT",
+  "Validation / Logic": "Normalize synonyms such as MRI -> MR, scanner -> CT when context is clear."
+ },
+ {
+  "Step": "4",
+  "Information to Capture": "Quantity",
+  "Required?": "Yes",
+  "Example Agent Question": "How many units did you observe?",
+  "Example User Answer": "Two MR and one CT",
+  "Validation / Logic": "Ask separately by modality if multiple equipment types are mentioned."
+ },
+ {
+  "Step": "5",
+  "Information to Capture": "Brand",
+  "Required?": "Preferred",
+  "Example Agent Question": "Do you know the brand or manufacturer?",
+  "Example User Answer": "NovaMed",
+  "Validation / Logic": "If unknown, save as Unknown. Never force a guess."
+ },
+ {
+  "Step": "6",
+  "Information to Capture": "Model",
+  "Required?": "Optional",
+  "Example Agent Question": "Do you know the model or product family?",
+  "Example User Answer": "NM-MR 700",
+  "Validation / Logic": "If not visible, leave blank or Unknown."
+ },
+ {
+  "Step": "7",
+  "Information to Capture": "Approximate Age",
+  "Required?": "Preferred",
+  "Example Agent Question": "Approximately how old is the equipment?",
+  "Example User Answer": "Around seven years",
+  "Validation / Logic": "Accept ranges such as 5-7 years or qualitative answers like new / old."
+ },
+ {
+  "Step": "8",
+  "Information to Capture": "Installation Year",
+  "Required?": "Derived / Optional",
+  "Example Agent Question": "Do you know approximately when it was installed?",
+  "Example User Answer": "Around 2019",
+  "Validation / Logic": "If age is known, estimate installation year from observation date."
+ },
+ {
+  "Step": "9",
+  "Information to Capture": "Confidence",
+  "Required?": "Derived",
+  "Example Agent Question": "How certain are you about this information?",
+  "Example User Answer": "I am quite sure about quantity, less sure about age.",
+  "Validation / Logic": "Agent can infer High / Medium / Low by field."
+ },
+ {
+  "Step": "10",
+  "Information to Capture": "Status",
+  "Required?": "Derived",
+  "Example Agent Question": "Is this directly observed, reported by someone, or estimated?",
+  "Example User Answer": "Directly observed",
+  "Validation / Logic": "Recommended values: Confirmed, Reported, Estimated, Unknown."
+ },
+ {
+  "Step": "11",
+  "Information to Capture": "Notes",
+  "Required?": "Optional",
+  "Example Agent Question": "Anything else useful about the equipment or site?",
+  "Example User Answer": "One MR appears newer than the other.",
+  "Validation / Logic": "Capture free text without losing structured fields."
+ },
+ {
+  "Step": "12",
+  "Information to Capture": "Review",
+  "Required?": "Yes",
+  "Example Agent Question": "I captured: 2 MR, NovaMed, approx. 7 years; 1 CT, Aurelia Health, approx. 5 years. Is that correct?",
+  "Example User Answer": "Yes",
+  "Validation / Logic": "Always confirm the structured summary before saving."
+ }
+]

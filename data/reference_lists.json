@@ -1,0 +1,29 @@
+{
+ "Brand": [
+  "NovaMed",
+  "Aurelia Health",
+  "BluePeak Medical",
+  "Orion Imaging",
+  "HelixCare",
+  "Zenith MedTech"
+ ],
+ "Modality": [
+  "MR",
+  "CT",
+  "Ultrasound",
+  "X-Ray",
+  "Patient Monitoring",
+  "Image Guided Therapy"
+ ],
+ "Status": [
+  "Confirmed",
+  "Reported",
+  "Estimated",
+  "Unknown"
+ ],
+ "Confidence": [
+  "High",
+  "Medium",
+  "Low"
+ ]
+}
