@@ -42,16 +42,19 @@ class Pregunta:
         return self.campo if self.indice is None else f"items.{self.indice}.{self.campo}"
 
 
+PLURAL_MODALIDAD = {
+    Modalidad.MR: "resonadores",
+    Modalidad.CT: "tomógrafos",
+    Modalidad.ULTRASOUND: "ecógrafos",
+    Modalidad.XRAY: "equipos de rayos X",
+    Modalidad.MONITORING: "monitores de paciente",
+    Modalidad.IGT: "angiógrafos",
+    Modalidad.UNKNOWN: "equipos",
+}
+
+
 def _etiqueta_modalidad(m: Modalidad) -> str:
-    return {
-        Modalidad.MR: "los resonadores",
-        Modalidad.CT: "los tomografos",
-        Modalidad.ULTRASOUND: "los ecografos",
-        Modalidad.XRAY: "los equipos de rayos X",
-        Modalidad.MONITORING: "los monitores",
-        Modalidad.IGT: "los angiografos",
-        Modalidad.UNKNOWN: "los equipos",
-    }[m]
+    return f"los {PLURAL_MODALIDAD[m]}"
 
 
 def _candidatas(borrador: Borrador) -> list[Pregunta]:
@@ -59,13 +62,13 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
     pendientes: list[Pregunta] = []
 
     if es_desconocido(borrador.customer):
-        pendientes.append(Pregunta("customer", "Que hospital o clinica visitaste?", None, PESO_CAMPO["customer"]))
+        pendientes.append(Pregunta("customer", "¿Qué hospital o clínica visitaste?", None, PESO_CAMPO["customer"]))
     if es_desconocido(borrador.country):
-        pendientes.append(Pregunta("country", "En que pais esta el cliente?", None, PESO_CAMPO["country"]))
+        pendientes.append(Pregunta("country", "¿En qué país está el cliente?", None, PESO_CAMPO["country"]))
     if es_desconocido(borrador.city):
-        pendientes.append(Pregunta("city", "En que ciudad esta?", None, PESO_CAMPO["city"]))
+        pendientes.append(Pregunta("city", "¿En qué ciudad está?", None, PESO_CAMPO["city"]))
     if not borrador.items:
-        pendientes.append(Pregunta("modality", "Que tipo de equipos viste?", None, PESO_CAMPO["modality"]))
+        pendientes.append(Pregunta("modality", "¿Qué tipo de equipos viste?", None, PESO_CAMPO["modality"]))
 
     for i, eq in enumerate(borrador.items):
         etiqueta = _etiqueta_modalidad(eq.modality)
@@ -74,20 +77,20 @@ def _candidatas(borrador: Borrador) -> list[Pregunta]:
         escala = 1.0 + math.log1p(max(eq.quantity, 1)) / 2
 
         if eq.modality == Modalidad.UNKNOWN:
-            pendientes.append(Pregunta("modality", "Que tipo de equipo era exactamente?", i, PESO_CAMPO["modality"]))
+            pendientes.append(Pregunta("modality", "¿Qué tipo de equipo era exactamente?", i, PESO_CAMPO["modality"]))
         if eq.quantity <= 0:
-            pendientes.append(Pregunta("quantity", f"Cuantos {etiqueta} viste?", i, PESO_CAMPO["quantity"]))
+            pendientes.append(Pregunta("quantity", f"¿Cuántos {PLURAL_MODALIDAD[eq.modality]} viste?", i, PESO_CAMPO["quantity"]))
         if es_desconocido(eq.brand):
             pendientes.append(
-                Pregunta("brand", f"Sabes de que marca son {etiqueta}?", i, PESO_CAMPO["brand"] * escala)
+                Pregunta("brand", f"¿Sabes de qué marca son {etiqueta}?", i, PESO_CAMPO["brand"] * escala)
             )
         if eq.age_years <= 0:
             pendientes.append(
-                Pregunta("age_years", f"Que antiguedad aproximada tienen {etiqueta}?", i, PESO_CAMPO["age_years"] * escala)
+                Pregunta("age_years", f"¿Qué antigüedad aproximada tienen {etiqueta}?", i, PESO_CAMPO["age_years"] * escala)
             )
         if es_desconocido(eq.model) and not es_desconocido(eq.brand):
             # El modelo solo se pregunta si ya sabemos la marca; si no, sobra.
-            pendientes.append(Pregunta("model", f"Recuerdas el modelo de {etiqueta}?", i, PESO_CAMPO["model"]))
+            pendientes.append(Pregunta("model", f"¿Recuerdas el modelo de {etiqueta}?", i, PESO_CAMPO["model"]))
 
     return sorted(pendientes, key=lambda p: -p.valor)
 
@@ -265,21 +268,41 @@ def _primera_edad(texto: str) -> int:
 # --- resumen de confirmacion ------------------------------------------------
 
 
-def resumen(borrador: Borrador) -> str:
-    """Frase de cierre antes de guardar, como pide el paso 12 del Excel."""
+def describir_equipos(borrador: Borrador) -> str:
+    """Los equipos en lenguaje corriente, sin mencionar al cliente.
+
+    Se usa suelto cuando todavia no hay cliente: asi se puede ensenar lo que si
+    se entendio sin construir una frase con un hueco dentro.
+    """
     if not borrador.items:
-        return "Todavia no hay ningun equipo registrado."
+        return "Todavía no hay ningún equipo registrado."
     partes = []
     for eq in borrador.items:
-        trozo = f"{eq.quantity or '?'} {eq.modality.value}"
+        cantidad = eq.quantity if eq.quantity else "?"
+        trozo = f"{cantidad} {PLURAL_MODALIDAD[eq.modality]}"
         if not es_desconocido(eq.brand):
             trozo += f" {eq.brand}"
         if not es_desconocido(eq.model):
             trozo += f" {eq.model}"
         if eq.age_years:
-            trozo += f", aprox. {eq.age_years} anos"
+            trozo += f", aprox. {eq.age_years} años"
         partes.append(trozo)
+    return "; ".join(partes)
+
+
+def resumen(borrador: Borrador) -> str:
+    """Frase de cierre antes de guardar, como pide el paso 12 del Excel.
+
+    Solo tiene sentido con un cliente identificado. Sin el saldria un "En
+    Unknown: ..." que ademas repite un problema ya senalado justo debajo, asi
+    que en ese caso se describe unicamente lo capturado.
+    """
+    if not borrador.items:
+        return "Todavía no hay ningún equipo registrado."
+    equipos = describir_equipos(borrador)
+    if es_desconocido(borrador.customer):
+        return f"Se entendió esto: {equipos}."
     lugar = borrador.customer
     if not es_desconocido(borrador.city):
         lugar += f" ({borrador.city})"
-    return f"En {lugar}: " + "; ".join(partes) + ". Es correcto?"
+    return f"En {lugar}: {equipos}. ¿Es correcto?"

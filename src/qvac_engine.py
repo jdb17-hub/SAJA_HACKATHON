@@ -60,6 +60,26 @@ class MotorQVAC:
         self._stt_id: str | None = None
         self._lock = threading.Lock()
         self.progreso_descarga: float | None = None
+        self._inicio_lock = threading.Lock()
+        self._inicio_hilo: threading.Thread | None = None
+
+    def iniciar_en_segundo_plano(self, reintentar: bool = False) -> None:
+        """Inicia una sola carga compartida, sin bloquear la interfaz."""
+        with self._inicio_lock:
+            if self.estado.listo or (self._inicio_hilo and self._inicio_hilo.is_alive()):
+                return
+            if self.estado.error and not reintentar:
+                return
+            self.estado.error = None
+
+            def cargar() -> None:
+                try:
+                    self.iniciar()
+                except Exception as exc:
+                    self.estado.error = f"{type(exc).__name__}: {exc}"
+
+            self._inicio_hilo = threading.Thread(target=cargar, name="qvac-inicio", daemon=True)
+            self._inicio_hilo.start()
 
     # --- ciclo de vida ------------------------------------------------------
 
@@ -153,7 +173,12 @@ class MotorQVAC:
                     load_model(
                         self._transport,
                         model_src=getattr(catalogo, config.STT_MODEL),
-                        model_type="whisper",
+                        # "whisper" a secas es un alias deprecado del SDK.
+                        model_type="whispercpp-transcription",
+                        # Sin `language`, whisper.cpp asume ingles y *traduce*:
+                        # una nota dictada en espanol vuelve en ingles, y los
+                        # nombres de hospital y marca se pierden por el camino.
+                        model_config={"language": config.STT_IDIOMA},
                         on_progress=progreso,
                     ),
                     timeout=3600,
@@ -235,17 +260,30 @@ class MotorQVAC:
         history = [{"role": "system", "content": sistema}, *mensajes]
         return self._completar(history, None, max_tokens).strip()
 
-    def transcribir(self, ruta_wav: str | Path, prompt: str | None = None) -> str:
-        """Voz -> texto con Whisper, tambien en el dispositivo."""
+    def transcribir(self, ruta_audio: str | Path, prompt: str | None = None) -> str:
+        """Voz -> texto con Whisper, tambien en el dispositivo.
+
+        `prompt` es el initial_prompt de whisper.cpp: sesga el vocabulario hacia
+        los terminos que esperamos oir, que es justo donde un modelo pequeno
+        falla mas (nombres de hospital y de marca).
+        """
         if not self.asegurar_stt():
             raise RuntimeError(self.estado.error or "No se pudo cargar el modelo de voz")
         from tetherto.qvac_sdk import TranscribeRequest, transcribe
 
-        peticion = TranscribeRequest(
-            model_id=self._stt_id,
-            audio_chunk={"type": "filePath", "value": str(ruta_wav)},
-            prompt=prompt,
-        )
+        # La peticion se construye con `model_validate` y no con argumentos: el
+        # SDK serializa con `exclude_unset=True`, asi que un `type` que venga del
+        # valor por defecto se cae del payload y el worker no sabe que metodo
+        # invocar. El sintoma es "expected a response stream", que no apunta a
+        # nada. Al validar un dict, el campo cuenta como puesto y viaja.
+        cuerpo: dict[str, Any] = {
+            "type": "transcribe",
+            "modelId": self._stt_id,
+            "audioChunk": {"type": "filePath", "value": str(ruta_audio)},
+        }
+        if prompt:
+            cuerpo["prompt"] = prompt
+        peticion = TranscribeRequest.model_validate(cuerpo)
 
         async def tarea() -> str:
             partes: list[str] = []
@@ -254,6 +292,8 @@ class MotorQVAC:
                     raise RuntimeError(evento.error)
                 if getattr(evento, "text", None):
                     partes.append(evento.text)
+                if getattr(evento, "done", False):
+                    break
             return "".join(partes)
 
         t0 = time.time()

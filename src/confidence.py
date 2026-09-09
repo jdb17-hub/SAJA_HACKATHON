@@ -140,10 +140,10 @@ def alertas(fila: dict) -> list[str]:
     avisos: list[str] = []
     dias = dias_desde(fila)
     if sin_verificar(fila):
-        avisos.append(f"Sin verificar desde hace {dias} dias")
+        avisos.append(f"Sin verificar desde hace {dias} días")
     if es_oportunidad_renovacion(fila):
         edad = int(fila.get("age_years") or 0)
-        avisos.append(f"Oportunidad de renovacion: {edad} anos")
+        avisos.append(f"Oportunidad de renovación: {edad} años")
     if es_desconocido(fila.get("brand")):
         avisos.append("Marca desconocida")
     if int(fila.get("quantity") or 0) <= 0:

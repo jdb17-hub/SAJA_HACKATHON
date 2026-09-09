@@ -121,8 +121,26 @@ Y sobre la fusión, el guardarraíl que hace usable un modelo pequeño:
 > se descarta y se pregunta. Un campo vacío es recuperable; una marca inventada
 > contamina la base y nadie se entera.
 
-Lo mismo con las edades: solo se acepta un número de años que se haya
-mencionado de verdad.
+Lo mismo con las edades, la ciudad y el país: solo se aceptan si se dijeron. Una
+nota que solo decía *"estoy en el hospital"* volvía con ciudad Santander y país
+Spain, inventados enteros por el modelo para no dejar el hueco vacío.
+
+**El cliente lleva dos comprobaciones más**, porque es el campo que decide dónde
+se archiva todo lo demás:
+
+- **Tiene que ser un nombre.** *"el hospital"*, *"la clínica de aquí al lado"* o
+  *"el centro médico"* describen un sitio pero no nombran a nadie. Si al quitar
+  el tipo de centro y el relleno no queda ninguna palabra propia, se deja vacío
+  y el agente pregunta.
+- **El emparejado va por palabras distintivas, no por parecido de cadenas.** Con
+  parecido, `"Hospital"` a secas se enganchaba al primer hospital de la lista, y
+  `"DemoCare"` —que comparten los trece clientes— también. Ahora hace falta que
+  un cliente gane con claridad; si varios empatan, se pregunta cuál en vez de
+  adivinar.
+
+Un cliente que **sí** se entiende pero no está en el catálogo se registra como
+candidato nuevo, y la interfaz lo marca como tal para que se revise el nombre
+antes de guardar.
 
 Las cantidades se concilian entre ambos. Si el texto menciona una modalidad una
 sola vez, las reglas mandan. Si la menciona varias veces es ambiguo —
@@ -203,11 +221,12 @@ src/
   confidence.py           puntaje 0-100 y alertas
   dedup.py                detección de duplicados
   nlquery.py              consultas en lenguaje natural
-  audio.py                WAV → 16 kHz mono para Whisper
+  audio.py                detección de formato de la grabación
   store.py                SQLite
 scripts/
   import_excel.py         Excel del reto → datos semilla
   test_extraccion.py      evaluación end-to-end (reglas vs. híbrido)
+  test_audio.py           ruta de voz: formato → Whisper → extracción
 ```
 
 ## Pruebas
@@ -224,7 +243,15 @@ Resultado medido en un portátil Windows sin GPU:
 | | Cliente correcto | Equipos correctos | Tiempo |
 |---|---|---|---|
 | Solo reglas | 16/16 | 14/16 | 0,1 s |
-| **Híbrido (QVAC)** | **16/16** | **16/16** | 23 s |
+| **Híbrido (QVAC)** | **16/16** | **16/16** | 26 s |
+
+Más dos baterías que cubren el sentido contrario, que es donde más daño hace
+equivocarse:
+
+| | Resultado |
+|---|---|
+| No inventa sitio cuando no se entiende | 5/5 |
+| Guarda el cliente nuevo en vez de descartarlo | 2/2 |
 
 **1,45 s por nota**, con el modelo cargado desde disco en 20 s. Los dos casos
 que las reglas solas no resuelven son los que necesitan interpretar la frase:
@@ -247,10 +274,39 @@ Se puede cambiar sin tocar código:
 export QVAC_LLM_MODEL=QWEN3_4B_INST_Q4_K_M
 ```
 
+### Dictado por voz
+
+El colaborador graba al salir de la visita y Whisper transcribe **en el
+dispositivo**; el audio nunca sale del equipo. Tres cosas que no son evidentes y
+que hay que hacer bien para que funcione:
+
+1. **No hay que convertir el audio.** QVAC trae ffmpeg y decodifica wav, ogg,
+   mp3, m4a, flac y aac con cualquier frecuencia de muestreo. Un intento de
+   remuestrear a 16 kHz con el módulo `wave` de Python rompe la grabación real:
+   el navegador produce WAV en coma flotante de 32 bits, que `wave` rechaza con
+   `unknown format: 3`. `src/audio.py` solo detecta el formato por los bytes de
+   cabecera y le pasa el fichero a QVAC.
+
+2. **Hay que declarar el idioma.** Sin `modelConfig={"language": "es"}`,
+   whisper.cpp asume inglés y **traduce**: una nota dictada en español vuelve en
+   inglés y los nombres propios se pierden. Se configura con `QVAC_STT_IDIOMA`.
+
+3. **La petición se construye con `model_validate`, no con argumentos.** El SDK
+   serializa con `exclude_unset=True`, así que el campo `type` que viene del
+   valor por defecto se cae del payload y el worker no sabe qué método invocar.
+   El síntoma es un `RuntimeError: expected a response stream` que no apunta a
+   nada.
+
+Además se le pasa a whisper un `initial_prompt` con el vocabulario esperado
+(modalidades y marcas del catálogo), que es donde más falla un modelo pequeño. Y
+si aun así entiende mal una palabra, la transcripción es **editable**: se corrige
+y se vuelve a extraer, sin repetir la grabación.
+
 ## Limitaciones
 
-- El remuestreo de audio es lineal; suficiente para voz cercana, no para
-  grabaciones con ruido de sala.
+- El dictado usa Whisper Base. Va bien en un pasillo tranquilo; con ruido de
+  sala conviene subir a `WHISPER_SMALL_Q8_0` (`QVAC_STT_MODEL`), que es más
+  lento pero bastante más preciso.
 - La captura por foto de placas (OCR) no está implementada. QVAC lo soporta y
   encajaría en `qvac_engine.py` sin tocar el resto.
 - La inferencia delegada por P2P tampoco: la app usa el modo on-device puro,

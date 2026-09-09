@@ -260,6 +260,11 @@ def _anclado(valor: str, texto: str) -> bool:
     return bool(palabras) and all(p in t for p in palabras)
 
 
+def _si_anclado(valor: str, texto: str, normalizar) -> str:
+    """Normaliza el valor solo si de verdad se dijo. Si no, DESCONOCIDO."""
+    return normalizar(valor) if _anclado(valor, texto) else DESCONOCIDO
+
+
 def _fusionar(propuesta: dict, pistas: Pistas, texto: str) -> Borrador:
     """Combina la propuesta del LLM con las reglas y descarta lo no anclado."""
     borrador = Borrador()
@@ -268,20 +273,33 @@ def _fusionar(propuesta: dict, pistas: Pistas, texto: str) -> Borrador:
     if not es_desconocido(pistas.customer):
         borrador.customer = pistas.customer
     else:
+        # Se ancla la propuesta *tal cual la dijo el modelo*, antes de
+        # normalizarla. Encajar con el catalogo no es prueba de nada: solo dice
+        # que el nombre existe, no que aparezca en esta nota. Sin esta
+        # comprobacion, un dictado mal entendido acaba archivando los equipos en
+        # el hospital equivocado, que es peor que dejarlo vacio y preguntar.
+        # Ademas de estar anclado, tiene que ser un nombre: "la clinica de aqui
+        # al lado" describe el sitio pero no nombra a nadie, y guardarlo crea una
+        # fila que despues no se puede reconciliar con ningun cliente real.
         candidato = str(propuesta.get("customer") or "")
-        nombre, ficha = N.normalizar_cliente(candidato)
-        # Un nombre propio inventado por el modelo no se acepta.
-        borrador.customer = nombre if (ficha or _anclado(nombre, texto)) else DESCONOCIDO
-        if ficha:
-            pistas.ficha_cliente = ficha
+        if _anclado(candidato, texto) and N.es_nombre_identificable(candidato):
+            nombre, ficha = N.normalizar_cliente(candidato)
+            borrador.customer = nombre
+            if ficha:
+                pistas.ficha_cliente = ficha
+        else:
+            borrador.customer = DESCONOCIDO
 
+    # Ciudad y pais tambien se anclan en el texto. Sin esta comprobacion el
+    # modelo rellenaba el hueco a su gusto: una nota que solo decia "estoy en el
+    # hospital" volvia con ciudad Santander y pais Spain, que nadie menciono.
     borrador.city = (
         pistas.city if not es_desconocido(pistas.city)
-        else N.normalizar_ciudad(str(propuesta.get("city") or ""))
+        else _si_anclado(str(propuesta.get("city") or ""), texto, N.normalizar_ciudad)
     )
     borrador.country = (
         pistas.country if not es_desconocido(pistas.country)
-        else N.normalizar_pais(str(propuesta.get("country") or ""))
+        else _si_anclado(str(propuesta.get("country") or ""), texto, N.normalizar_pais)
     )
     if pistas.ficha_cliente:
         if es_desconocido(borrador.city):

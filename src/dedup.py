@@ -12,7 +12,7 @@ from . import normalize as N
 from .confidence import dias_desde
 from .schema import DESCONOCIDO, Equipo, es_desconocido
 
-VENTANA_DIAS = 365  # mas alla de un ano, se considera una re-verificacion, no un duplicado
+VENTANA_DIAS = 365  # más allá de un ano, se considera una re-verificacion, no un duplicado
 
 
 def _similitud(equipo: Equipo, fila: dict, cliente: str) -> tuple[float, list[str]]:
@@ -50,7 +50,7 @@ def _similitud(equipo: Equipo, fila: dict, cliente: str) -> tuple[float, list[st
     dias = dias_desde(fila)
     if dias is not None and dias > VENTANA_DIAS:
         puntaje -= 0.20
-        motivos.append(f"observacion antigua ({dias} dias)")
+        motivos.append(f"observación antigua ({dias} días)")
 
     return max(0.0, min(1.0, puntaje)), motivos
 
@@ -97,8 +97,8 @@ def _accion_sugerida(equipo: Equipo, fila: dict, puntaje: float) -> str:
 
 DESCRIPCION_ACCION = {
     "confirmar": "Ya existe y coincide. Confirmarla sube su confianza sin duplicar la cuenta.",
-    "enriquecer": "Ya existe pero tu observacion aporta datos nuevos. Conviene completarla.",
-    "revisar": "Se parece a una observacion existente, pero algo no cuadra. Revisa antes de guardar.",
+    "enriquecer": "Ya existe pero tu observación aporta datos nuevos. Conviene completarla.",
+    "revisar": "Se parece a una observación existente, pero algo no cuadra. Revisa antes de guardar.",
 }
 
 

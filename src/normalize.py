@@ -253,15 +253,86 @@ def normalizar_ciudad(valor: str) -> str:
     return CIUDAD_ES.get(clave(valor)) or valor.strip()
 
 
+# Palabras que aparecen en el nombre de casi cualquier centro sanitario, y por
+# tanto no identifican a ninguno.
+# Solo el tipo de centro. Palabras como "nacional", "general" o "regional" no
+# entran aqui: forman parte de nombres reales ("Hospital Nacional"), y tratarlas
+# como relleno haria irreconocibles a clientes legitimos.
+GENERICOS = {
+    "hospital", "hospitales", "clinica", "clinicas", "centro", "centros",
+    "medico", "medica", "instituto", "policlinica", "policlinico", "sanatorio",
+    "diagnostico", "diagnostica",
+    "clinic", "medical", "center", "centre", "institute",
+}
+
+# Relleno que sobrevive a la transcripcion pero no forma parte de un nombre
+# propio: "la clinica de aqui al lado" no es el nombre de ningun cliente.
+RELLENO = {
+    "de", "del", "la", "las", "los", "el", "un", "una", "y", "que", "aqui",
+    "alla", "ahi", "al", "lado", "cerca", "este", "esta", "esa", "ese", "mismo",
+    "misma", "otro", "otra", "nuevo", "nueva", "viejo", "vieja", "grande",
+    "pequeno", "donde", "estoy", "visite", "the", "of", "here", "next", "door",
+    "nearby", "this", "that", "one",
+}
+
+
+def tokens_distintivos(nombre: str) -> list[str]:
+    """Palabras del nombre que de verdad identifican a un cliente."""
+    return [
+        t for t in clave(nombre).split()
+        if len(t) > 2 and t not in GENERICOS and t not in RELLENO
+    ]
+
+
+def es_nombre_identificable(nombre: str) -> bool:
+    """Si no queda nada tras quitar lo generico y el relleno, no es un nombre.
+
+    "el hospital", "la clinica de aqui al lado" o "centro" describen un sitio
+    pero no nombran a ningun cliente. Guardarlos ensucia la base con filas que
+    nadie podra reconciliar despues, asi que es mejor dejarlo vacio y preguntar.
+    """
+    return bool(tokens_distintivos(nombre))
+
+
 def normalizar_cliente(valor: str) -> tuple[str, dict | None]:
     """Empareja contra el catalogo de clientes conocidos.
 
-    Devuelve (nombre normalizado, ficha del catalogo o None si es cliente nuevo).
+    Devuelve (nombre, ficha del catalogo) donde la ficha es None si el cliente
+    no estaba en la base -- un cliente nuevo, que se registra igual. El nombre
+    es DESCONOCIDO cuando lo dicho no identifica a nadie.
+
+    El emparejado va por palabras distintivas y no por parecido de cadenas: con
+    parecido, "Hospital" solo o "DemoCare" (que comparten los trece clientes del
+    catalogo) se enganchaban al primero de la lista e inventaban un cliente que
+    nadie menciono.
     """
     if not valor or valor.strip().lower() in {"unknown", "desconocido", ""}:
         return DESCONOCIDO, None
+
+    propios = tokens_distintivos(valor)
+    if not propios:
+        return DESCONOCIDO, None
+
     clientes = catalogo_clientes()
-    match = emparejar(valor, [c["customer"] for c in clientes], 0.80)
-    if match:
-        return match, next(c for c in clientes if c["customer"] == match)
+    puntuados: list[tuple[float, dict]] = []
+    for ficha in clientes:
+        del_catalogo = tokens_distintivos(ficha["customer"])
+        comunes = len(set(propios) & set(del_catalogo))
+        if comunes:
+            puntuados.append((comunes / max(len(propios), len(del_catalogo)), ficha))
+
+    puntuados.sort(key=lambda p: -p[0])
+    if puntuados:
+        mejor, ficha = puntuados[0]
+        segundo = puntuados[1][0] if len(puntuados) > 1 else 0.0
+        # Se exige que gane con claridad: si varios clientes empatan, lo dicho no
+        # basta para elegir entre ellos y forzarlo seria adivinar.
+        if mejor >= 0.5 and mejor > segundo:
+            return ficha["customer"], ficha
+        if mejor >= 0.5:
+            # Empate: lo dicho apunta al catalogo pero no distingue a cual. No es
+            # un cliente nuevo -- es uno conocido dicho a medias, asi que se
+            # pregunta en vez de crear un duplicado con el nombre incompleto.
+            return DESCONOCIDO, None
+
     return valor.strip(), None

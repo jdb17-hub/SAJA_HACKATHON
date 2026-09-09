@@ -1,4 +1,9 @@
 __pycache__/
 *.pyc
 data/observaciones.db
-.streamlit/
+
+# La configuracion de Streamlit si va al repo: sin ella la app se queda
+# esperando el correo de bienvenida al arrancar en una maquina nueva.
+# Lo unico que se excluye son los secretos.
+.streamlit/secrets.toml
+*.xlsx
