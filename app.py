@@ -5,7 +5,6 @@ transcripción de voz) corre en este dispositivo a traves de QVAC.
 """
 from __future__ import annotations
 
-import tempfile
 import time
 from datetime import date
 from pathlib import Path
@@ -14,7 +13,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from src import conflicts, documents, followup, geo, insights, nlquery, store
+from src import capture, conflicts, documents, followup, geo, insights, nlquery, store
 from src.config import DIAS_SIN_VERIFICAR, EDAD_RENOVACION
 from src.confidence import alertas, desglose, dias_desde, es_oportunidad_renovacion, sin_verificar
 from src.extract import extraer
@@ -202,107 +201,71 @@ def pagina_capturar(motor) -> None:
 
 
 def _entrada_nueva(motor) -> None:
-    pestana_texto, pestana_voz, pestana_doc = st.tabs(["Escribir", "Dictar", "Subir documento"])
-
-    with pestana_texto:
-        st.session_state.visit_date = st.date_input("Fecha de la visita", value=st.session_state.visit_date, max_value=date.today())
-        texto = st.text_area(
-            "¿Qué observaste en la visita?",
-            height=130,
-            placeholder="Estoy en Hospital DemoCare Pacific, en Panamá. Tienen dos resonadores "
-            "y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
-        )
-        enviado = st.button("Extraer datos", type="primary", disabled=not motor.estado.listo)
-        if enviado and texto.strip():
-            _procesar(texto, "Text", motor)
-
-        st.caption("Ejemplos de las pruebas del reto:")
-        ejemplos = [
-            "Estoy en Hospital DemoCare Pacific, en Panamá. Tienen dos resonadores y un tomógrafo. "
-            "Uno de los resonadores parece de unos ocho años.",
-            "En Hospital DemoCare Horizon vi tres resonadores. Dos se ven viejos y uno mucho más nuevo.",
-            "Clínica DemoCare Light tiene dos tomógrafos Orion Imaging de unos once años.",
-            "Centro Médico DemoCare Valley tiene un MR y dos CTs. No sé las marcas.",
-        ]
-        for i, ejemplo in enumerate(ejemplos):
-            if st.button(ejemplo[:78] + "...", key=f"ej{i}", width="stretch", disabled=not motor.estado.listo):
-                _procesar(ejemplo, "Text", motor)
-
-    with pestana_voz:
-        if not motor.estado.listo:
-            st.info("El dictado estará disponible cuando la captura esté lista.")
-        audio = st.audio_input("Graba tu nota de voz al salir de la visita", disabled=not motor.estado.listo)
-        if audio is not None and st.button("Transcribir y extraer", type="primary"):
-            _procesar_audio(audio, motor)
-
-    with pestana_doc:
-        _entrada_documento(motor)
-
-
-def _entrada_documento(motor) -> None:
-    """Sube un informe, un acta o un inventario y sale el mismo borrador.
-
-    Leer el fichero es parsing, no inferencia: se abre y se saca el texto que ya
-    trae dentro. A partir de ahi sigue exactamente el mismo camino que una nota
-    escrita a mano, asi que no hay una segunda forma de equivocarse.
-    """
-    st.caption(
-        "Informe de visita, acta o inventario. Formatos: PDF, Word (.docx), "
-        "Excel, CSV y texto. No se lee texto de imagenes ni de PDF escaneados."
-    )
     st.session_state.visit_date = st.date_input(
-        "Fecha de la visita", value=st.session_state.visit_date,
-        max_value=date.today(), key="fecha_doc",
-    )
-
-    subido = st.file_uploader(
-        "Documento de la visita",
-        type=[e.lstrip(".") for e in sorted(documents.EXTENSIONES)],
-        key=f"doc{st.session_state.revision}",
-    )
-    if subido is None:
+        "Fecha de la visita", value=st.session_state.visit_date, max_value=date.today())
+    st.caption("Describe una observación, adjunta documentos o audio con +, o graba con el micrófono. Las consultas al inventario siguen en Preguntar.")
+    pendiente = st.session_state.get("captura_pendiente")
+    # Dentro de un contenedor, el compositor queda en Capturar, no fijo sobre las otras pestañas.
+    with st.container():
+        envio = st.chat_input(
+            "Describe lo que observaste en la visita…", key="barra_captura",
+            accept_file="multiple", file_type=[e.lstrip('.') for e in sorted(capture.EXTENSIONS)],
+            accept_audio=True, audio_sample_rate=16000, max_upload_size=25,
+            disabled=pendiente is not None,
+        )
+    st.caption("Documentos: PDF con texto, Word, Excel, CSV y texto. Audio: WAV, MP3, M4A, OGG, FLAC y AAC. Máximo 25 MB por envío. Los PDF escaneados requieren OCR.")
+    if envio is not None:
+        pendiente = {"texto": envio if isinstance(envio, str) else envio.text,
+            "archivos": [] if isinstance(envio, str) else list(envio.files),
+            "audio": None if isinstance(envio, str) else envio.audio}
+        st.session_state.captura_pendiente = pendiente
+        st.session_state.pop("captura_preparada", None)
+        st.session_state.pop("captura_error", None)
+    if pendiente is None:
         return
-
-    try:
-        doc = documents.leer(subido.name, subido.getvalue())
-    except documents.DocumentoNoSoportado as exc:
-        st.error(str(exc))
+    if st.button("Descartar envío"):
+        _limpiar_envio()
+        st.rerun()
+    if not motor.estado.listo:
+        st.info("Tu observación está pendiente. Se preparará cuando QVAC esté listo.")
         return
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"No se pudo leer el documento: {type(exc).__name__}: {exc}")
+    if "captura_preparada" not in st.session_state and "captura_error" not in st.session_state:
+        with st.spinner("Preparando la observación en el dispositivo…"):
+            try:
+                st.session_state.captura_preparada = capture.preparar(
+                    pendiente['texto'], pendiente['archivos'], pendiente['audio'], motor)
+            except Exception as exc:
+                st.session_state.captura_error = str(exc)
+    if st.session_state.get("captura_error"):
+        st.error(st.session_state.captura_error)
+        if st.button("Reintentar preparación"):
+            st.session_state.pop("captura_error", None)
+            st.rerun()
         return
-
-    detalle = f"{doc.palabras} palabras"
-    if doc.paginas:
-        detalle += f" · {doc.paginas} paginas"
-    trozos = len(documents.trocear(doc.texto))
-    if trozos > 1:
-        detalle += f" · se leera en {trozos} partes"
-    st.success(f"**{doc.nombre}** — {detalle}")
-    for aviso in doc.avisos:
+    entrada = st.session_state.captura_preparada
+    if entrada.nombres:
+        st.caption("Adjuntos: " + " · ".join(entrada.nombres))
+    for aviso in entrada.avisos:
         st.warning(aviso)
-
-    detectados = documents.clientes_mencionados(doc.texto)
+    # La revisión conserva el contenido después de un fallo y permite corregir transcripciones.
+    texto = st.text_area("Observación para revisar", entrada.texto, height=200, key="revision_envio")
+    clientes = documents.clientes_mencionados(texto)
     cliente = None
-    if len(detectados) > 1:
-        # Repartir los equipos de un hospital en la ficha de otro es el peor
-        # fallo posible aqui, y no se nota hasta que alguien pregunta.
-        st.warning(
-            f"El documento menciona {len(detectados)} clientes. Elige de cual "
-            "capturas ahora; los demas se registran subiendolo otra vez."
-        )
-        cliente = st.selectbox("Cliente que vas a capturar", detectados, key="cliente_doc")
+    if len(clientes) > 1:
+        st.warning("Se mencionan varios clientes. Selecciona cuál registrar en esta observación.")
+        cliente = st.selectbox("Cliente que vas a capturar", [None, *clientes],
+            format_func=lambda x: x or "Selecciona un cliente", key="cliente_envio")
+    if st.button("Extraer observación", type="primary",
+                 disabled=not texto.strip() or (len(clientes) > 1 and cliente is None)):
+        if entrada.fuente == 'Document' or len(clientes) > 1:
+            _procesar_documento(texto, ', '.join(entrada.nombres) or 'Observación', cliente, motor)
+        else:
+            _procesar(texto, entrada.fuente, motor)
 
-    with st.expander("Texto extraido del documento", expanded=trozos == 1):
-        st.caption("Puedes corregirlo o recortarlo antes de extraer.")
-        texto = st.text_area(
-            "Texto", doc.texto, height=260, label_visibility="collapsed",
-            key=f"txtdoc{st.session_state.revision}",
-        )
 
-    if st.button("Extraer datos del documento", type="primary", disabled=not motor.estado.listo):
-        if texto.strip():
-            _procesar_documento(texto, doc.nombre, cliente, motor)
+def _limpiar_envio():
+    for key in ('captura_pendiente', 'captura_preparada', 'captura_error', 'revision_envio', 'cliente_envio'):
+        st.session_state.pop(key, None)
 
 
 def _procesar_documento(texto: str, nombre: str, cliente: str | None, motor) -> None:
@@ -338,46 +301,6 @@ def _procesar_documento(texto: str, nombre: str, cliente: str | None, motor) -> 
     _persistir_borrador()
     st.session_state.revision += 1
     st.rerun()
-
-
-def _procesar_audio(audio, motor) -> None:
-    from src.audio import duracion_segundos, guardar_audio
-    from src.config import STT_PROMPT
-
-    if not motor.estado.listo:
-        st.warning("La captura aún no está lista. Consulta el estado en la barra lateral.")
-        return
-
-    datos = audio.getvalue()
-    ruta = None
-    with st.spinner("Transcribiendo en el dispositivo (Whisper)..."):
-        try:
-            # Se guarda tal cual: QVAC decodifica el formato del navegador.
-            ruta = guardar_audio(datos, Path(tempfile.gettempdir()) / "qvac_nota")
-            duracion = duracion_segundos(ruta)
-            if 0 < duracion < 0.6:
-                st.warning("La grabación es demasiado corta. Habla un par de segundos más.")
-                return
-            texto = motor.transcribir(ruta, prompt=STT_PROMPT)
-        except Exception as exc:  # noqa: BLE001
-            # Se adjunta que llego exactamente: sin esto, un fallo de dictado es
-            # imposible de diagnosticar sin reproducirlo.
-            st.error(f"No se pudo transcribir: {type(exc).__name__}: {exc}")
-            st.caption(
-                f"Diagnóstico — {len(datos)} bytes, cabecera {datos[:4]!r}, "
-                f"fichero {ruta.name if ruta else 'no escrito'}, "
-                f"modelo {motor.estado.stt_model}"
-            )
-            return
-
-    if not texto:
-        st.warning(
-            "Whisper no encontró voz en la grabación. Prueba a hablar más cerca del micrófono."
-        )
-        st.caption(f"Diagnóstico — {len(datos)} bytes, {duracion:.1f}s de audio, {ruta.suffix}")
-        return
-
-    _procesar(texto, "Voice", motor)
 
 
 def _procesar(texto: str, fuente: str, motor) -> None:
@@ -673,6 +596,7 @@ def _avisar_discrepancias(borrador: Borrador, existentes: list[dict]) -> None:
 
 
 def _reiniciar() -> None:
+    _limpiar_envio()
     st.session_state.inicio_captura = None
     for k in ["borrador", "texto_original", "omitidas", "conversacion", "pregunta_actual", "visit_id", "visit_version", "visit_date"]:
         st.session_state.pop(k, None)
