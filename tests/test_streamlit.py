@@ -65,12 +65,25 @@ class StreamlitTests(unittest.TestCase):
     def test_loading_preserves_note(self):
         self.motor.estado.listo=False
         a=self.app()
-        self.assertTrue(self.button(a,'Extraer datos').disabled)
-        a.text_area[0].input('Nota escrita durante la carga').run(timeout=20)
+        self.assertFalse(a.chat_input[0].disabled)
+        a.chat_input[0].set_value('Nota escrita durante la carga').run(timeout=20)
+        self.assertFalse(a.exception)
+        self.assertEqual(a.session_state['captura_pendiente']['texto'],'Nota escrita durante la carga')
         self.motor.estado.listo=True;a.run(timeout=20)
         self.assertFalse(a.exception)
-        self.assertFalse(self.button(a,'Extraer datos').disabled)
-        self.assertEqual(a.text_area[0].value,'Nota escrita durante la carga')
+        self.assertEqual(next(t.value for t in a.text_area if t.label=='Observación para revisar'),'Nota escrita durante la carga')
+        self.assertTrue(any(t.label=='Tu pregunta' for t in a.text_input))
+    def test_capture_bar_keeps_queries_separate(self):
+        a=self.app()
+        self.assertEqual(len(a.chat_input),1)
+        self.assertFalse(any(t.label in ['Escribir','Dictar','Subir documento'] for t in a.tabs))
+        a.chat_input[0].set_value('Hospital Nuevo Real tiene dos tomógrafos').run(timeout=20)
+        self.assertFalse(a.exception)
+        self.assertEqual(len(store.todas()),0)
+        self.assertIsNone(a.session_state['borrador'])
+        self.button(a,'Descartar envío').click().run(timeout=20)
+        self.assertFalse(a.exception)
+        self.assertFalse(a.chat_input[0].disabled)
 
 
 if __name__=='__main__':unittest.main()

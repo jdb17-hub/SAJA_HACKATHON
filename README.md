@@ -123,3 +123,14 @@ La revisión automatizada ejecutó QVAC local real, pero **no desconectó la red
 ## Limitaciones
 
 Prototipo de una estación local: sin autenticación multiusuario, sincronización ni cifrado propio de SQLite. La inferencia pequeña puede equivocarse; la revisión humana sigue siendo necesaria. La detección léxica y el tratamiento de subconjuntos cubren expresiones concretas, no toda construcción posible. Rangos de edad en seguimiento se conservan como nota, sin inventar un punto medio. Fotografías/OCR y P2P quedan fuera de esta entrega.
+
+
+## Captura unificada
+
+En **Capturar**, una sola barra permite escribir una observación, adjuntar documentos o audios con **+**, grabar con el **micrófono** y enviar. Se requiere Streamlit 1.58 o posterior.
+
+Después del envío se muestra el contenido reunido para revisar y corregir. **Extraer observación** inicia el flujo existente de borrador, seguimiento y confirmación de guardado. Si hay varios clientes, se debe elegir cuál registrar. **Preguntar** mantiene su propia pestaña y no recibe estos envíos.
+
+Los adjuntos admiten los formatos del lector de documentos y WAV, MP3, M4A, OGG, FLAC y AAC. El máximo combinado es 25 MB. La transcripción sigue usando QVAC local y los archivos temporales de audio se eliminan al terminar, también si ocurre un error. Los PDF escaneados siguen requiriendo OCR.
+
+Un envío pendiente se conserva en la sesión mientras carga el motor o se reintenta un error. Puede descartarse para preparar otro. Esta retención en sesión no equivale a un borrador persistido: el borrador se guarda después de extraer.
