@@ -340,6 +340,8 @@ def _fusionar(propuesta: dict, pistas: Pistas, texto: str) -> Borrador:
     equipos = _corregir_cantidades(equipos, pistas)
     equipos = _completar_desde_pistas(equipos, pistas, texto)
     equipos = _desambiguar_marcas(equipos, texto)
+    equipos = _solo_modalidades_mencionadas(equipos, texto)
+    equipos = _unir_gemelos(equipos)
 
     for eq in equipos:
         if eq.status in (Estado.DESCONOCIDO,):
@@ -404,6 +406,57 @@ def _desambiguar_marcas(equipos: list[Equipo], texto: str) -> list[Equipo]:
             eq.brand = DESCONOCIDO
             eq.model = DESCONOCIDO
     return equipos
+
+
+def _solo_modalidades_mencionadas(equipos: list[Equipo], texto: str) -> list[Equipo]:
+    """Descarta las modalidades que nadie nombró.
+
+    El guardarrail de anclaje cubría marca, modelo, edad y ubicación, pero no la
+    modalidad, y el modelo llega a inventarse un equipo entero: de "tres
+    ecógrafos y dos ultrasonidos" salía además un CT que no aparece por ningún
+    lado. Un equipo fantasma es peor que uno que falta, porque nadie lo
+    cuestiona al leer la ficha.
+    """
+    tokens = _tokens(texto)
+    conservados = []
+    for eq in equipos:
+        if eq.modality == Modalidad.UNKNOWN or _posiciones_modalidad(tokens, eq.modality):
+            conservados.append(eq)
+    return conservados
+
+
+def _unir_gemelos(equipos: list[Equipo]) -> list[Equipo]:
+    """Junta grupos de la misma modalidad que no se distinguen en nada.
+
+    "Ecógrafo" y "ultrasonido" son la misma cosa, así que "tres ecógrafos y dos
+    ultrasonidos" son cinco equipos de una modalidad, no dos flotas distintas.
+    Las cantidades se suman porque a estas alturas ya están conciliadas con el
+    texto: cada mención aportó su número.
+
+    Solo se unen los indistinguibles. Si difieren en marca, modelo o edad se
+    dejan aparte, porque ahí la separación sí significa algo: es la que
+    distingue "dos viejos y uno nuevo".
+    """
+    unidos: list[Equipo] = []
+    for eq in equipos:
+        gemelo = next(
+            (
+                u for u in unidos
+                if u.modality == eq.modality
+                and N.clave(u.brand) == N.clave(eq.brand)
+                and N.clave(u.model) == N.clave(eq.model)
+                and u.age_years == eq.age_years
+            ),
+            None,
+        )
+        if gemelo is None:
+            unidos.append(eq)
+            continue
+        if eq.quantity is not None:
+            gemelo.quantity = (gemelo.quantity or 0) + eq.quantity
+        if eq.notes and eq.notes not in gemelo.notes:
+            gemelo.notes = f"{gemelo.notes} {eq.notes}".strip()
+    return unidos
 
 
 def _entero(valor) -> int:

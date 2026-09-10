@@ -53,6 +53,10 @@ CASOS: list[tuple[str, str, list[tuple[str, int]]]] = [
      "Hospital DemoCare Park", [("MR", 1), ("CT", 3)]),
     ("Clinica DemoCare Central tiene muchos ecografos, quizas ocho, todos Aurelia Health.",
      "Clinica DemoCare Central", [("Ultrasound", 8)]),
+    # "Ecografo" y "ultrasonido" son la misma modalidad: cinco equipos, no dos
+    # flotas. Y de aqui salia ademas un CT que nadie menciono.
+    ("Hospital DemoCare Pines tiene tres ecografos y dos ultrasonidos.",
+     "Hospital DemoCare Pines", [("Ultrasound", 5)]),
 ]
 
 

@@ -1,0 +1,22 @@
+Informe de visita tecnica
+Cliente: Hospital DemoCare Pacific
+Ciudad: Panama City, Panama
+Fecha: 12 de agosto de 2026
+Tecnico: Field User 04
+
+Resumen de la visita
+
+Durante la revision anual se recorrieron las areas de imagen y urgencias.
+El servicio de radiologia cuenta con dos resonadores NovaMed, modelo NM-MR 700,
+instalados hace aproximadamente siete anos. Ambos operan con normalidad.
+
+Tambien se verifico un tomografo Aurelia Health de unos cinco anos, ubicado en
+la planta baja. El equipo presenta desgaste en la camilla.
+
+El area de urgencias dispone de cuatro ecografos HelixCare relativamente
+recientes, de unos dos anos.
+
+Observaciones adicionales
+
+El cliente menciona interes en renovar el equipamiento de resonancia durante
+el proximo ejercicio presupuestario.
