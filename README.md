@@ -124,6 +124,8 @@ La revisión automatizada ejecutó QVAC local real, pero **no desconectó la red
 
 Prototipo de una estación local: sin autenticación multiusuario, sincronización ni cifrado propio de SQLite. La inferencia pequeña puede equivocarse; la revisión humana sigue siendo necesaria. La detección léxica y el tratamiento de subconjuntos cubren expresiones concretas, no toda construcción posible. Rangos de edad en seguimiento se conservan como nota, sin inventar un punto medio. Fotografías/OCR y P2P quedan fuera de esta entrega.
 
+No se contemplo al final la version movil por problemas durante el SDK para el uso en android para mas informacion de este error a continuacion el pdf en cuestion: [QVAC Bare Kit — Android Bug Report](./QVAC_bare-kit_Android_bug_report.pdf)
+
 
 ## Captura unificada
 
